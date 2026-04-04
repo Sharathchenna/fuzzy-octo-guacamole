@@ -13,6 +13,9 @@ final class BrowserViewModel: ObservableObject {
 
     weak var webView: WKWebView?
     var onStateChange: ((String, String) -> Void)?
+    var onDownloadRequested: ((String, URL?) -> Void)?
+    var onDownloadFinished: ((URL) -> Void)?
+    var onDownloadFailed: ((String, URL?) -> Void)?
 
     func attach(webView: WKWebView) {
         let shouldSync = self.webView !== webView

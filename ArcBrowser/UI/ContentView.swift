@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import SwiftUI
 
@@ -9,10 +10,16 @@ struct ContentView: View {
     @State private var isRenamingSpace = false
     @State private var spaceNameDraft = ""
     @State private var isCreatingFolder = false
+    @State private var editingFolderID: UUID?
     @State private var folderNameDraft = ""
     @State private var isAddingSavedLink = false
+    @State private var editingSavedLinkID: UUID?
     @State private var savedLinkTitleDraft = ""
     @State private var savedLinkURLDraft = ""
+    @State private var isCreatingProfile = false
+    @State private var isRenamingProfile = false
+    @State private var profileNameDraft = ""
+    @State private var selectedThemeDraft: ProfileTheme = .sky
     @State private var isCommandPalettePresented = false
     @State private var commandQuery = ""
     @FocusState private var isCommandFieldFocused: Bool
@@ -56,6 +63,15 @@ struct ContentView: View {
             browserViewModel.onStateChange = { title, url in
                 shellViewModel.updateSelectedTab(title: title, url: url)
             }
+            browserViewModel.onDownloadRequested = { title, url in
+                shellViewModel.recordDownloadRequested(title: title, sourceURL: url)
+            }
+            browserViewModel.onDownloadFinished = { destinationURL in
+                shellViewModel.markLatestDownloadFinished(destinationURL: destinationURL)
+            }
+            browserViewModel.onDownloadFailed = { reason, destinationURL in
+                shellViewModel.markLatestDownloadFailed(reason: reason, destinationURL: destinationURL)
+            }
             loadSelectedTab()
         }
     }
@@ -68,6 +84,75 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
+                    HStack(spacing: 8) {
+                        Button {
+                            profileNameDraft = ""
+                            selectedThemeDraft = .sky
+                            isRenamingProfile = false
+                            isCreatingProfile = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .buttonStyle(.plain)
+
+                        Picker("Theme", selection: Binding(
+                            get: { shellViewModel.selectedProfile.theme },
+                            set: { shellViewModel.updateSelectedProfileTheme($0) }
+                        )) {
+                            ForEach(ProfileTheme.allCases, id: \.self) { theme in
+                                Text(theme.rawValue.capitalized).tag(theme)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+
+                        Button {
+                            profileNameDraft = shellViewModel.selectedProfile.name
+                            selectedThemeDraft = shellViewModel.selectedProfile.theme
+                            isCreatingProfile = false
+                            isRenamingProfile = true
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if isCreatingProfile || isRenamingProfile {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField(isCreatingProfile ? "New profile name" : "Rename profile", text: $profileNameDraft)
+                                .textFieldStyle(.roundedBorder)
+
+                            Picker("Theme", selection: $selectedThemeDraft) {
+                                ForEach(ProfileTheme.allCases, id: \.self) { theme in
+                                    Text(theme.rawValue.capitalized).tag(theme)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+
+                            HStack {
+                                Button(isCreatingProfile ? "Add" : "Save") {
+                                    if isCreatingProfile {
+                                        shellViewModel.createProfile(name: profileNameDraft, theme: selectedThemeDraft)
+                                    } else {
+                                        shellViewModel.renameSelectedProfile(to: profileNameDraft)
+                                        shellViewModel.updateSelectedProfileTheme(selectedThemeDraft)
+                                    }
+
+                                    profileNameDraft = ""
+                                    isCreatingProfile = false
+                                    isRenamingProfile = false
+                                }
+                                .disabled(profileNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                                Button("Cancel") {
+                                    profileNameDraft = ""
+                                    isCreatingProfile = false
+                                    isRenamingProfile = false
+                                }
+                            }
+                        }
+                    }
+
                     Picker("Profile", selection: selectedProfileBinding) {
                         ForEach(shellViewModel.profiles) { profile in
                             Text(profile.name).tag(profile.id)
@@ -75,6 +160,15 @@ struct ContentView: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.menu)
+
+                    Button(role: .destructive) {
+                        shellViewModel.deleteSelectedProfile()
+                    } label: {
+                        Label("Delete Profile", systemImage: "trash")
+                            .foregroundStyle(shellViewModel.canDeleteSelectedProfile ? .red : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!shellViewModel.canDeleteSelectedProfile)
                 }
 
                 section("Spaces") {
@@ -157,37 +251,25 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
 
-                    ForEach(shellViewModel.tabsForSelectedSpace) { tab in
-                        HStack(spacing: 8) {
-                            Button {
-                                shellViewModel.selectTab(tab.id)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(tab.title)
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
+                    if !shellViewModel.pinnedTabsForSelectedSpace.isEmpty {
+                        Text("Pinned")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
-                                    Text(tab.url)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .background(tab.id == shellViewModel.selectedTabID ? shellViewModel.selectedProfile.theme.color.opacity(0.15) : Color.clear)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
+                        ForEach(shellViewModel.pinnedTabsForSelectedSpace) { tab in
+                            tabRow(tab)
+                        }
+                    }
 
-                            Button {
-                                shellViewModel.closeTab(tab.id)
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
+                    if !shellViewModel.unpinnedTabsForSelectedSpace.isEmpty {
+                        if !shellViewModel.pinnedTabsForSelectedSpace.isEmpty {
+                            Text("Tabs")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        ForEach(shellViewModel.unpinnedTabsForSelectedSpace) { tab in
+                            tabRow(tab)
                         }
                     }
                 }
@@ -196,6 +278,7 @@ struct ContentView: View {
                     HStack(spacing: 8) {
                         Button {
                             folderNameDraft = ""
+                            editingFolderID = nil
                             isCreatingFolder = true
                         } label: {
                             Image(systemName: "plus")
@@ -239,6 +322,16 @@ struct ContentView: View {
                                 Spacer(minLength: 0)
 
                                 Button {
+                                    folderNameDraft = folder.name
+                                    editingFolderID = folder.id
+                                    isCreatingFolder = false
+                                } label: {
+                                    Image(systemName: "pencil")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+
+                                Button {
                                     shellViewModel.saveCurrentPage(folderID: folder.id, title: browserViewModel.pageTitle, url: browserViewModel.displayURL)
                                 } label: {
                                     Image(systemName: "plus.circle")
@@ -256,6 +349,25 @@ struct ContentView: View {
                                 .buttonStyle(.plain)
                             }
 
+                            if editingFolderID == folder.id {
+                                HStack(spacing: 8) {
+                                    TextField("Rename folder", text: $folderNameDraft)
+                                        .textFieldStyle(.roundedBorder)
+
+                                    Button("Save") {
+                                        shellViewModel.renameFolder(folder.id, to: folderNameDraft)
+                                        folderNameDraft = ""
+                                        editingFolderID = nil
+                                    }
+                                    .disabled(folderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                                    Button("Cancel") {
+                                        folderNameDraft = ""
+                                        editingFolderID = nil
+                                    }
+                                }
+                            }
+
                             ForEach(shellViewModel.savedLinks(in: folder)) { link in
                                 savedLinkRow(link, icon: "link")
                                     .padding(.leading, 18)
@@ -269,6 +381,7 @@ struct ContentView: View {
                         Button {
                             savedLinkTitleDraft = browserViewModel.pageTitle == "ArcBrowser" ? "" : browserViewModel.pageTitle
                             savedLinkURLDraft = browserViewModel.displayURL
+                            editingSavedLinkID = nil
                             isAddingSavedLink.toggle()
                         } label: {
                             Image(systemName: "plus")
@@ -313,6 +426,36 @@ struct ContentView: View {
                         }
                     }
 
+                    if editingSavedLinkID != nil {
+                        VStack(spacing: 8) {
+                            TextField("Title", text: $savedLinkTitleDraft)
+                                .textFieldStyle(.roundedBorder)
+
+                            TextField("URL", text: $savedLinkURLDraft)
+                                .textFieldStyle(.roundedBorder)
+
+                            HStack {
+                                Button("Save") {
+                                    guard let editingSavedLinkID else { return }
+                                    shellViewModel.updateSavedLink(editingSavedLinkID, title: savedLinkTitleDraft, url: savedLinkURLDraft)
+                                    savedLinkTitleDraft = ""
+                                    savedLinkURLDraft = ""
+                                    self.editingSavedLinkID = nil
+                                }
+                                .disabled(
+                                    savedLinkTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                                    savedLinkURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                )
+
+                                Button("Cancel") {
+                                    savedLinkTitleDraft = ""
+                                    savedLinkURLDraft = ""
+                                    self.editingSavedLinkID = nil
+                                }
+                            }
+                        }
+                    }
+
                     ForEach(shellViewModel.topLevelSavedLinksForSelectedSpace) { link in
                         savedLinkRow(link, icon: "bookmark")
                     }
@@ -331,6 +474,22 @@ struct ContentView: View {
 
                     ForEach(Array(shellViewModel.recentHistoryEntries.prefix(8))) { entry in
                         historyRow(entry)
+                    }
+                }
+
+                section("Downloads") {
+                    HStack(spacing: 8) {
+                        Button(role: .destructive) {
+                            shellViewModel.clearDownloads()
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(shellViewModel.downloadRecords.isEmpty)
+                    }
+
+                    ForEach(Array(shellViewModel.recentDownloadRecords.prefix(8))) { record in
+                        downloadRow(record)
                     }
                 }
             }
@@ -479,6 +638,13 @@ struct ContentView: View {
                 subtitle: browserViewModel.displayURL,
                 systemImage: "bookmark",
                 action: .saveCurrentPage
+            ),
+            CommandPaletteItem(
+                id: "command-toggle-pin",
+                title: shellViewModel.selectedTab?.isPinned == true ? "Unpin Tab" : "Pin Tab",
+                subtitle: shellViewModel.selectedTab?.title ?? "Current tab",
+                systemImage: shellViewModel.selectedTab?.isPinned == true ? "pin.slash" : "pin",
+                action: .togglePinnedSelectedTab
             )
         ]
 
@@ -513,6 +679,32 @@ struct ContentView: View {
             )
         })
 
+        if shellViewModel.selectedTab != nil {
+            items.append(contentsOf: shellViewModel.spaces.filter { $0.id != shellViewModel.selectedSpaceID }.map { space in
+                let profileName = shellViewModel.profiles.first(where: { $0.id == space.profileID })?.name ?? ""
+                return CommandPaletteItem(
+                    id: "move-tab-space-\(space.id.uuidString)",
+                    title: "Move Tab to \(space.name)",
+                    subtitle: profileName.isEmpty ? "Move current tab" : "Move current tab to \(profileName)",
+                    systemImage: "arrow.right.circle",
+                    action: .moveSelectedTabToSpace(space.id)
+                )
+            })
+        }
+
+        if shellViewModel.selectedTab != nil {
+            items.append(contentsOf: shellViewModel.spaces.filter { $0.id != shellViewModel.selectedSpaceID }.map { space in
+                let profileName = shellViewModel.profiles.first(where: { $0.id == space.profileID })?.name ?? ""
+                return CommandPaletteItem(
+                    id: "move-tab-space-\(space.id.uuidString)",
+                    title: "Move Tab to \(space.name)",
+                    subtitle: profileName.isEmpty ? "Move current tab" : "Move current tab to \(profileName)",
+                    systemImage: "arrow.right.circle",
+                    action: .moveSelectedTabToSpace(space.id)
+                )
+            })
+        }
+
         items.append(contentsOf: shellViewModel.savedLinks.map { link in
             CommandPaletteItem(
                 id: "saved-link-\(link.id.uuidString)",
@@ -530,6 +722,16 @@ struct ContentView: View {
                 subtitle: entry.url,
                 systemImage: "clock.arrow.circlepath",
                 action: .openHistoryEntry(entry.id)
+            )
+        })
+
+        items.append(contentsOf: shellViewModel.recentDownloadRecords.prefix(50).map { record in
+            CommandPaletteItem(
+                id: "download-\(record.id.uuidString)",
+                title: record.title,
+                subtitle: record.destinationPath ?? record.sourceURL,
+                systemImage: "arrow.down.circle",
+                action: .openDownload(record.id)
             )
         })
 
@@ -578,10 +780,65 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
 
+            Button {
+                editingSavedLinkID = link.id
+                savedLinkTitleDraft = link.title
+                savedLinkURLDraft = link.url
+                isAddingSavedLink = false
+            } label: {
+                Image(systemName: "pencil")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+
             Button(role: .destructive) {
                 shellViewModel.deleteSavedLink(link.id)
             } label: {
                 Image(systemName: "trash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func tabRow(_ tab: BrowserTabSession) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                shellViewModel.selectTab(tab.id)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(tab.title)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text(tab.url)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(tab.id == shellViewModel.selectedTabID ? shellViewModel.selectedProfile.theme.color.opacity(0.15) : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                shellViewModel.togglePinned(for: tab.id)
+            } label: {
+                Image(systemName: tab.isPinned ? "pin.slash" : "pin")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                shellViewModel.closeTab(tab.id)
+            } label: {
+                Image(systemName: "xmark")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -618,6 +875,31 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+        }
+    }
+
+    private func downloadRow(_ record: BrowserDownloadRecord) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                openDownloadRecord(record)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(record.title)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text(record.destinationPath ?? record.sourceURL)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+
+            Text(downloadStatusLabel(for: record.status))
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -659,6 +941,9 @@ struct ContentView: View {
         case .saveCurrentPage:
             shellViewModel.saveCurrentPage(folderID: nil, title: browserViewModel.pageTitle, url: browserViewModel.displayURL)
 
+        case .togglePinnedSelectedTab:
+            shellViewModel.togglePinnedForSelectedTab()
+
         case let .selectProfile(profileID):
             shellViewModel.selectProfile(profileID)
             loadSelectedTab()
@@ -679,6 +964,13 @@ struct ContentView: View {
                 loadSelectedTab()
             }
 
+        case let .moveSelectedTabToSpace(spaceID):
+            if let space = shellViewModel.spaces.first(where: { $0.id == spaceID }) {
+                shellViewModel.selectProfile(space.profileID)
+                shellViewModel.moveSelectedTab(to: spaceID)
+                loadSelectedTab()
+            }
+
         case let .openSavedLink(linkID):
             if let link = shellViewModel.savedLinks.first(where: { $0.id == linkID }),
                let space = shellViewModel.spaces.first(where: { $0.id == link.spaceID }) {
@@ -696,6 +988,11 @@ struct ContentView: View {
                 browserViewModel.load(entry.url)
             }
 
+        case let .openDownload(downloadID):
+            if let record = shellViewModel.downloadRecords.first(where: { $0.id == downloadID }) {
+                openDownloadRecord(record)
+            }
+
         case let .openTypedInput(input):
             shellViewModel.updateSelectedTab(title: input, url: input)
             addressBarText = input
@@ -703,6 +1000,24 @@ struct ContentView: View {
         }
 
         closeCommandPalette()
+    }
+
+    private func downloadStatusLabel(for status: BrowserDownloadStatus) -> String {
+        switch status {
+        case .inProgress:
+            return "In Progress"
+        case .finished:
+            return "Done"
+        case .failed:
+            return "Failed"
+        }
+    }
+
+    private func openDownloadRecord(_ record: BrowserDownloadRecord) {
+        guard record.status == .finished,
+              let destinationPath = record.destinationPath else { return }
+
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: destinationPath)])
     }
 }
 

@@ -8,11 +8,14 @@ enum CommandPaletteAction: Hashable {
     case createTab
     case createSpace
     case saveCurrentPage
+    case togglePinnedSelectedTab
     case selectProfile(UUID)
     case selectSpace(UUID)
     case selectTab(UUID)
+    case moveSelectedTabToSpace(UUID)
     case openSavedLink(UUID)
     case openHistoryEntry(UUID)
+    case openDownload(UUID)
     case openTypedInput(String)
 }
 

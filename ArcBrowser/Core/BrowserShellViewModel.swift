@@ -6,6 +6,32 @@ struct BrowserTabSession: Identifiable, Hashable, Codable {
     var spaceID: UUID
     var title: String
     var url: String
+    var isPinned: Bool
+
+    init(id: UUID, spaceID: UUID, title: String, url: String, isPinned: Bool = false) {
+        self.id = id
+        self.spaceID = spaceID
+        self.title = title
+        self.url = url
+        self.isPinned = isPinned
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case spaceID
+        case title
+        case url
+        case isPinned
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        spaceID = try container.decode(UUID.self, forKey: .spaceID)
+        title = try container.decode(String.self, forKey: .title)
+        url = try container.decode(String.self, forKey: .url)
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+    }
 }
 
 struct BrowserProfile: Identifiable, Hashable, Codable {
@@ -42,6 +68,21 @@ struct BrowserHistoryEntry: Identifiable, Hashable, Codable {
     var visitedAt: Date
 }
 
+enum BrowserDownloadStatus: String, Hashable, Codable {
+    case inProgress
+    case finished
+    case failed
+}
+
+struct BrowserDownloadRecord: Identifiable, Hashable, Codable {
+    let id: UUID
+    var title: String
+    var sourceURL: String
+    var destinationPath: String?
+    var status: BrowserDownloadStatus
+    var createdAt: Date
+}
+
 enum ProfileTheme: String, CaseIterable, Hashable, Codable {
     case sky
     case sunset
@@ -67,18 +108,38 @@ final class BrowserShellViewModel: ObservableObject {
     @Published private(set) var savedLinks: [SavedLink]
     @Published private(set) var tabSessions: [BrowserTabSession]
     @Published private(set) var historyEntries: [BrowserHistoryEntry]
+    @Published private(set) var downloadRecords: [BrowserDownloadRecord]
     @Published var selectedProfileID: UUID
     @Published var selectedSpaceID: UUID
     @Published var selectedTabID: UUID
+    private let persistenceEnabled: Bool
 
-    init() {
-        if let persistedState = BrowserPersistence.load() {
+    init(initialState: BrowserShellState? = nil, persistenceEnabled: Bool = true) {
+        self.persistenceEnabled = persistenceEnabled
+
+        if let initialState {
+            profiles = initialState.profiles
+            spaces = initialState.spaces
+            folders = initialState.folders
+            savedLinks = initialState.savedLinks
+            tabSessions = initialState.tabSessions
+            historyEntries = initialState.historyEntries
+            downloadRecords = initialState.downloadRecords
+            selectedProfileID = initialState.selectedProfileID
+            selectedSpaceID = initialState.selectedSpaceID
+            selectedTabID = initialState.selectedTabID
+            normalizeSelection()
+            return
+        }
+
+        if persistenceEnabled, let persistedState = BrowserPersistence.load() {
             profiles = persistedState.profiles
             spaces = persistedState.spaces
             folders = persistedState.folders
             savedLinks = persistedState.savedLinks
             tabSessions = persistedState.tabSessions
             historyEntries = persistedState.historyEntries
+            downloadRecords = persistedState.downloadRecords
             selectedProfileID = persistedState.selectedProfileID
             selectedSpaceID = persistedState.selectedSpaceID
             selectedTabID = persistedState.selectedTabID
@@ -110,7 +171,8 @@ final class BrowserShellViewModel: ObservableObject {
             SavedLink(id: UUID(), spaceID: unwindSpace.id, folderID: nil, title: "YouTube", url: "https://youtube.com")
         ]
         historyEntries = []
-        let focusTab = BrowserTabSession(id: UUID(), spaceID: focusSpace.id, title: "Apple", url: "https://www.apple.com")
+        downloadRecords = []
+        let focusTab = BrowserTabSession(id: UUID(), spaceID: focusSpace.id, title: "Apple", url: "https://www.apple.com", isPinned: true)
         let docsTab = BrowserTabSession(id: UUID(), spaceID: focusSpace.id, title: "GitHub", url: "https://github.com")
         let researchTab = BrowserTabSession(id: UUID(), spaceID: researchSpace.id, title: "WebKit", url: "https://webkit.org")
         let unwindTab = BrowserTabSession(id: UUID(), spaceID: unwindSpace.id, title: "YouTube", url: "https://youtube.com")
@@ -138,6 +200,14 @@ final class BrowserShellViewModel: ObservableObject {
         tabSessions.filter { $0.spaceID == selectedSpaceID }
     }
 
+    var pinnedTabsForSelectedSpace: [BrowserTabSession] {
+        tabsForSelectedSpace.filter(\.isPinned)
+    }
+
+    var unpinnedTabsForSelectedSpace: [BrowserTabSession] {
+        tabsForSelectedSpace.filter { !$0.isPinned }
+    }
+
     var selectedTab: BrowserTabSession? {
         tabsForSelectedSpace.first(where: { $0.id == selectedTabID }) ?? tabsForSelectedSpace.first
     }
@@ -154,8 +224,16 @@ final class BrowserShellViewModel: ObservableObject {
         spacesForSelectedProfile.count > 1
     }
 
+    var canDeleteSelectedProfile: Bool {
+        profiles.count > 1
+    }
+
     var recentHistoryEntries: [BrowserHistoryEntry] {
         historyEntries.sorted { $0.visitedAt > $1.visitedAt }
+    }
+
+    var recentDownloadRecords: [BrowserDownloadRecord] {
+        downloadRecords.sorted { $0.createdAt > $1.createdAt }
     }
 
     func selectProfile(_ profileID: UUID) {
@@ -165,6 +243,60 @@ final class BrowserShellViewModel: ObservableObject {
         if let firstSpace = spaces.first(where: { $0.profileID == profileID }) {
             selectedSpaceID = firstSpace.id
             selectedTabID = tabSessions.first(where: { $0.spaceID == firstSpace.id })?.id ?? selectedTabID
+        }
+
+        normalizeSelection()
+        persist()
+    }
+
+    func createProfile(name: String, theme: ProfileTheme) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+
+        let profile = BrowserProfile(id: UUID(), name: trimmedName, theme: theme)
+        profiles.append(profile)
+        selectedProfileID = profile.id
+
+        let space = BrowserSpace(id: UUID(), profileID: profile.id, name: "Start", icon: "sparkles")
+        spaces.append(space)
+        selectedSpaceID = space.id
+
+        let tab = BrowserTabSession(id: UUID(), spaceID: space.id, title: "New Tab", url: "https://www.apple.com")
+        tabSessions.append(tab)
+        selectedTabID = tab.id
+
+        persist()
+    }
+
+    func updateSelectedProfileTheme(_ theme: ProfileTheme) {
+        guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { return }
+        profiles[index].theme = theme
+        persist()
+    }
+
+    func renameSelectedProfile(to name: String) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { return }
+        profiles[index].name = trimmedName
+        persist()
+    }
+
+    func deleteSelectedProfile() {
+        guard canDeleteSelectedProfile else { return }
+        guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { return }
+
+        let deletedProfileID = profiles[index].id
+        let deletedSpaceIDs = spaces.filter { $0.profileID == deletedProfileID }.map(\.id)
+
+        profiles.remove(at: index)
+        spaces.removeAll { $0.profileID == deletedProfileID }
+        folders.removeAll { deletedSpaceIDs.contains($0.spaceID) }
+        savedLinks.removeAll { deletedSpaceIDs.contains($0.spaceID) }
+        tabSessions.removeAll { deletedSpaceIDs.contains($0.spaceID) }
+
+        if let fallbackProfile = profiles.first {
+            selectedProfileID = fallbackProfile.id
         }
 
         normalizeSelection()
@@ -211,6 +343,27 @@ final class BrowserShellViewModel: ObservableObject {
         }
 
         normalizeSelection()
+        persist()
+    }
+
+    func moveSelectedTab(to spaceID: UUID) {
+        guard let index = tabSessions.firstIndex(where: { $0.id == selectedTabID }) else { return }
+        tabSessions[index].spaceID = spaceID
+        selectedSpaceID = spaceID
+        selectedTabID = tabSessions[index].id
+        normalizeSelection()
+        persist()
+    }
+
+    func togglePinnedForSelectedTab() {
+        guard let index = tabSessions.firstIndex(where: { $0.id == selectedTabID }) else { return }
+        tabSessions[index].isPinned.toggle()
+        persist()
+    }
+
+    func togglePinned(for tabID: UUID) {
+        guard let index = tabSessions.firstIndex(where: { $0.id == tabID }) else { return }
+        tabSessions[index].isPinned.toggle()
         persist()
     }
 
@@ -299,6 +452,14 @@ final class BrowserShellViewModel: ObservableObject {
         persist()
     }
 
+    func renameFolder(_ folderID: UUID, to name: String) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        guard let index = folders.firstIndex(where: { $0.id == folderID }) else { return }
+        folders[index].name = trimmedName
+        persist()
+    }
+
     func createSavedLink(title: String, url: String, folderID: UUID?) {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -319,6 +480,16 @@ final class BrowserShellViewModel: ObservableObject {
 
     func deleteSavedLink(_ linkID: UUID) {
         savedLinks.removeAll { $0.id == linkID }
+        persist()
+    }
+
+    func updateSavedLink(_ linkID: UUID, title: String, url: String) {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty, !trimmedURL.isEmpty else { return }
+        guard let index = savedLinks.firstIndex(where: { $0.id == linkID }) else { return }
+        savedLinks[index].title = trimmedTitle
+        savedLinks[index].url = trimmedURL
         persist()
     }
 
@@ -361,6 +532,43 @@ final class BrowserShellViewModel: ObservableObject {
         persist()
     }
 
+    func recordDownloadRequested(title: String, sourceURL: URL?) {
+        let resolvedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackTitle = sourceURL?.lastPathComponent.isEmpty == false ? sourceURL?.lastPathComponent : sourceURL?.absoluteString
+
+        downloadRecords.insert(
+            BrowserDownloadRecord(
+                id: UUID(),
+                title: resolvedTitle.isEmpty ? (fallbackTitle ?? "Download") : resolvedTitle,
+                sourceURL: sourceURL?.absoluteString ?? "",
+                destinationPath: nil,
+                status: .inProgress,
+                createdAt: Date()
+            ),
+            at: 0
+        )
+        persist()
+    }
+
+    func markLatestDownloadFinished(destinationURL: URL) {
+        guard let index = downloadRecords.firstIndex(where: { $0.status == .inProgress }) else { return }
+        downloadRecords[index].status = .finished
+        downloadRecords[index].destinationPath = destinationURL.path
+        persist()
+    }
+
+    func markLatestDownloadFailed(reason: String, destinationURL: URL?) {
+        guard let index = downloadRecords.firstIndex(where: { $0.status == .inProgress }) else { return }
+        downloadRecords[index].status = .failed
+        downloadRecords[index].destinationPath = destinationURL?.path ?? reason
+        persist()
+    }
+
+    func clearDownloads() {
+        downloadRecords.removeAll()
+        persist()
+    }
+
     func saveCurrentPage(folderID: UUID?, title: String, url: String) {
         let resolvedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let fallbackTitle = url.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -399,6 +607,8 @@ final class BrowserShellViewModel: ObservableObject {
     }
 
     private func persist() {
+        guard persistenceEnabled else { return }
+
         BrowserPersistence.save(
             BrowserShellState(
                 profiles: profiles,
@@ -407,6 +617,7 @@ final class BrowserShellViewModel: ObservableObject {
                 savedLinks: savedLinks,
                 tabSessions: tabSessions,
                 historyEntries: historyEntries,
+                downloadRecords: downloadRecords,
                 selectedProfileID: selectedProfileID,
                 selectedSpaceID: selectedSpaceID,
                 selectedTabID: selectedTabID
