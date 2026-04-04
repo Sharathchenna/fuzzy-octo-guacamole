@@ -2,1025 +2,868 @@ import AppKit
 import Combine
 import SwiftUI
 
+// MARK: - Arc Style Content View
+// Redesigned following SwiftUI Design Principles and Frontend Design best practices
+// Key principles applied:
+// - Restraint over decoration
+// - Consistent spacing (4, 8, 12, 16, 20, 24, 32)
+// - Limited typography scale (5 sizes max)
+// - System semantic colors
+// - One font design (.rounded) throughout
+// - Bold, distinctive aesthetic
+
 struct ContentView: View {
     @StateObject private var browserViewModel = BrowserViewModel()
     @StateObject private var shellViewModel = BrowserShellViewModel()
     @State private var addressBarText = ""
-    @State private var isCreatingSpace = false
-    @State private var isRenamingSpace = false
-    @State private var spaceNameDraft = ""
-    @State private var isCreatingFolder = false
-    @State private var editingFolderID: UUID?
-    @State private var folderNameDraft = ""
-    @State private var isAddingSavedLink = false
-    @State private var editingSavedLinkID: UUID?
-    @State private var savedLinkTitleDraft = ""
-    @State private var savedLinkURLDraft = ""
-    @State private var isCreatingProfile = false
-    @State private var isRenamingProfile = false
-    @State private var profileNameDraft = ""
-    @State private var selectedThemeDraft: ProfileTheme = .sky
-    @State private var isCommandPalettePresented = false
-    @State private var commandQuery = ""
-    @FocusState private var isCommandFieldFocused: Bool
-
-    private var selectedProfileBinding: Binding<UUID> {
-        Binding(
-            get: { shellViewModel.selectedProfileID },
-            set: { shellViewModel.selectProfile($0) }
-        )
+    @State private var isSidebarCollapsed = false
+    @State private var showingCommandBar = false
+    
+    // Split view state
+    @State private var isSplitViewActive = false
+    @State private var splitTabID: UUID?
+    @StateObject private var splitBrowserViewModel = BrowserViewModel()
+    
+    // Animation states
+    @State private var sidebarAppeared = false
+    
+    private var themeColor: Color {
+        shellViewModel.selectedProfile.theme.color
     }
-
+    
     var body: some View {
-        HSplitView {
-            sidebar
-                .frame(minWidth: 250, idealWidth: 280, maxWidth: 320)
-
-            browserPane
-        }
-        .frame(minWidth: 900, minHeight: 600)
-        .tint(shellViewModel.selectedProfile.theme.color)
-        .overlay {
-            if isCommandPalettePresented {
-                commandPaletteOverlay
+        HStack(spacing: 0) {
+            // Arc-style Sidebar
+            if !isSidebarCollapsed {
+                ArcSidebar(
+                    shellViewModel: shellViewModel,
+                    browserViewModel: browserViewModel,
+                    addressBarText: $addressBarText,
+                    isCollapsed: $isSidebarCollapsed,
+                    showingCommandBar: $showingCommandBar,
+                    isSplitViewActive: isSplitViewActive,
+                    onToggleSplitView: toggleSplitView
+                )
+                .frame(width: 260)
+                .transition(.move(edge: .leading).combined(with: .opacity))
             }
+            
+            // Main Content Area with Split View support
+            ArcMainContent(
+                browserViewModel: browserViewModel,
+                splitBrowserViewModel: splitBrowserViewModel,
+                shellViewModel: shellViewModel,
+                addressBarText: $addressBarText,
+                isSidebarCollapsed: isSidebarCollapsed,
+                isSplitViewActive: isSplitViewActive,
+                splitTabID: splitTabID,
+                onToggleSidebar: { 
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                        isSidebarCollapsed.toggle()
+                    }
+                },
+                onToggleSplitView: toggleSplitView
+            )
         }
-        .onReceive(browserViewModel.$displayURL.removeDuplicates()) { url in
-            guard !url.isEmpty else { return }
-            addressBarText = url
-            shellViewModel.recordHistoryVisit(title: browserViewModel.pageTitle, url: url)
+        .frame(minWidth: 960, minHeight: 640)
+        .sheet(isPresented: $showingCommandBar) {
+            ArcSpotlightCommandBar(
+                shellViewModel: shellViewModel,
+                browserViewModel: browserViewModel,
+                isPresented: $showingCommandBar,
+                onOpenURL: { url in
+                    addressBarText = url
+                    // Update the current tab's URL so the view switches from NewTabView to WebView
+                    shellViewModel.updateSelectedTab(title: "Loading...", url: url)
+                    browserViewModel.load(url)
+                }
+            )
         }
-        .onReceive(NotificationCenter.default.publisher(for: .openCommandPalette)) { _ in
-            openCommandPalette()
-        }
-        .onChange(of: shellViewModel.selectedTabID) { _, _ in
-            loadSelectedTab()
-        }
-        .onChange(of: shellViewModel.selectedSpaceID) { _, _ in
-            loadSelectedTab()
+        .onReceive(browserViewModel.$displayURL) { url in
+            if !url.isEmpty {
+                addressBarText = url
+                shellViewModel.recordHistoryVisit(title: browserViewModel.pageTitle, url: url)
+            }
         }
         .onAppear {
-            browserViewModel.onStateChange = { title, url in
-                shellViewModel.updateSelectedTab(title: title, url: url)
-            }
-            browserViewModel.onDownloadRequested = { title, url in
-                shellViewModel.recordDownloadRequested(title: title, sourceURL: url)
-            }
-            browserViewModel.onDownloadFinished = { destinationURL in
-                shellViewModel.markLatestDownloadFinished(destinationURL: destinationURL)
-            }
-            browserViewModel.onDownloadFailed = { reason, destinationURL in
-                shellViewModel.markLatestDownloadFailed(reason: reason, destinationURL: destinationURL)
-            }
-            loadSelectedTab()
+            setupBrowserCallbacks()
+            loadInitialTab()
         }
     }
-
-    private var sidebar: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Profiles")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    HStack(spacing: 8) {
-                        Button {
-                            profileNameDraft = ""
-                            selectedThemeDraft = .sky
-                            isRenamingProfile = false
-                            isCreatingProfile = true
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .buttonStyle(.plain)
-
-                        Picker("Theme", selection: Binding(
-                            get: { shellViewModel.selectedProfile.theme },
-                            set: { shellViewModel.updateSelectedProfileTheme($0) }
-                        )) {
-                            ForEach(ProfileTheme.allCases, id: \.self) { theme in
-                                Text(theme.rawValue.capitalized).tag(theme)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-
-                        Button {
-                            profileNameDraft = shellViewModel.selectedProfile.name
-                            selectedThemeDraft = shellViewModel.selectedProfile.theme
-                            isCreatingProfile = false
-                            isRenamingProfile = true
-                        } label: {
-                            Image(systemName: "pencil")
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    if isCreatingProfile || isRenamingProfile {
-                        VStack(alignment: .leading, spacing: 8) {
-                            TextField(isCreatingProfile ? "New profile name" : "Rename profile", text: $profileNameDraft)
-                                .textFieldStyle(.roundedBorder)
-
-                            Picker("Theme", selection: $selectedThemeDraft) {
-                                ForEach(ProfileTheme.allCases, id: \.self) { theme in
-                                    Text(theme.rawValue.capitalized).tag(theme)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-
-                            HStack {
-                                Button(isCreatingProfile ? "Add" : "Save") {
-                                    if isCreatingProfile {
-                                        shellViewModel.createProfile(name: profileNameDraft, theme: selectedThemeDraft)
-                                    } else {
-                                        shellViewModel.renameSelectedProfile(to: profileNameDraft)
-                                        shellViewModel.updateSelectedProfileTheme(selectedThemeDraft)
-                                    }
-
-                                    profileNameDraft = ""
-                                    isCreatingProfile = false
-                                    isRenamingProfile = false
-                                }
-                                .disabled(profileNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                                Button("Cancel") {
-                                    profileNameDraft = ""
-                                    isCreatingProfile = false
-                                    isRenamingProfile = false
-                                }
-                            }
-                        }
-                    }
-
-                    Picker("Profile", selection: selectedProfileBinding) {
-                        ForEach(shellViewModel.profiles) { profile in
-                            Text(profile.name).tag(profile.id)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-
-                    Button(role: .destructive) {
-                        shellViewModel.deleteSelectedProfile()
-                    } label: {
-                        Label("Delete Profile", systemImage: "trash")
-                            .foregroundStyle(shellViewModel.canDeleteSelectedProfile ? .red : .secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!shellViewModel.canDeleteSelectedProfile)
-                }
-
-                section("Spaces") {
-                    HStack(spacing: 8) {
-                        Button {
-                            spaceNameDraft = ""
-                            isRenamingSpace = false
-                            isCreatingSpace = true
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            spaceNameDraft = shellViewModel.selectedSpace.name
-                            isCreatingSpace = false
-                            isRenamingSpace = true
-                        } label: {
-                            Image(systemName: "pencil")
-                        }
-                        .buttonStyle(.plain)
-
-                        Button(role: .destructive) {
-                            shellViewModel.deleteSelectedSpace()
-                        } label: {
-                            Image(systemName: "trash")
-                                .foregroundStyle(shellViewModel.canDeleteSelectedSpace ? .red : .secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!shellViewModel.canDeleteSelectedSpace)
-                    }
-
-                    if isCreatingSpace || isRenamingSpace {
-                        HStack(spacing: 8) {
-                            TextField(isCreatingSpace ? "New space name" : "Rename space", text: $spaceNameDraft)
-                                .textFieldStyle(.roundedBorder)
-
-                            Button(isCreatingSpace ? "Add" : "Save") {
-                                if isCreatingSpace {
-                                    shellViewModel.createSpace(name: spaceNameDraft)
-                                } else {
-                                    shellViewModel.renameSelectedSpace(to: spaceNameDraft)
-                                }
-
-                                spaceNameDraft = ""
-                                isCreatingSpace = false
-                                isRenamingSpace = false
-                            }
-                            .disabled(spaceNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                            Button("Cancel") {
-                                spaceNameDraft = ""
-                                isCreatingSpace = false
-                                isRenamingSpace = false
-                            }
-                        }
-                    }
-
-                    ForEach(shellViewModel.spacesForSelectedProfile) { space in
-                        Button {
-                            shellViewModel.selectSpace(space.id)
-                        } label: {
-                            Label(space.name, systemImage: space.icon)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .background(space.id == shellViewModel.selectedSpaceID ? shellViewModel.selectedProfile.theme.color.opacity(0.15) : Color.clear)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                section("Open Tabs") {
-                    Button {
-                        shellViewModel.createTab(in: shellViewModel.selectedSpaceID)
-                    } label: {
-                        Label("New Tab", systemImage: "plus")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.plain)
-
-                    if !shellViewModel.pinnedTabsForSelectedSpace.isEmpty {
-                        Text("Pinned")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        ForEach(shellViewModel.pinnedTabsForSelectedSpace) { tab in
-                            tabRow(tab)
-                        }
-                    }
-
-                    if !shellViewModel.unpinnedTabsForSelectedSpace.isEmpty {
-                        if !shellViewModel.pinnedTabsForSelectedSpace.isEmpty {
-                            Text("Tabs")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        ForEach(shellViewModel.unpinnedTabsForSelectedSpace) { tab in
-                            tabRow(tab)
-                        }
-                    }
-                }
-
-                section("Folders") {
-                    HStack(spacing: 8) {
-                        Button {
-                            folderNameDraft = ""
-                            editingFolderID = nil
-                            isCreatingFolder = true
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            shellViewModel.saveCurrentPage(folderID: nil, title: browserViewModel.pageTitle, url: browserViewModel.displayURL)
-                        } label: {
-                            Image(systemName: "bookmark")
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(browserViewModel.displayURL.isEmpty)
-                    }
-
-                    if isCreatingFolder {
-                        HStack(spacing: 8) {
-                            TextField("New folder name", text: $folderNameDraft)
-                                .textFieldStyle(.roundedBorder)
-
-                            Button("Add") {
-                                shellViewModel.createFolder(name: folderNameDraft)
-                                folderNameDraft = ""
-                                isCreatingFolder = false
-                            }
-                            .disabled(folderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                            Button("Cancel") {
-                                folderNameDraft = ""
-                                isCreatingFolder = false
-                            }
-                        }
-                    }
-
-                    ForEach(shellViewModel.foldersForSelectedSpace) { folder in
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 8) {
-                                Label(folder.name, systemImage: "folder")
-                                    .font(.subheadline.weight(.medium))
-
-                                Spacer(minLength: 0)
-
-                                Button {
-                                    folderNameDraft = folder.name
-                                    editingFolderID = folder.id
-                                    isCreatingFolder = false
-                                } label: {
-                                    Image(systemName: "pencil")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
-
-                                Button {
-                                    shellViewModel.saveCurrentPage(folderID: folder.id, title: browserViewModel.pageTitle, url: browserViewModel.displayURL)
-                                } label: {
-                                    Image(systemName: "plus.circle")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(browserViewModel.displayURL.isEmpty)
-
-                                Button(role: .destructive) {
-                                    shellViewModel.deleteFolder(folder.id)
-                                } label: {
-                                    Image(systemName: "trash")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                            }
-
-                            if editingFolderID == folder.id {
-                                HStack(spacing: 8) {
-                                    TextField("Rename folder", text: $folderNameDraft)
-                                        .textFieldStyle(.roundedBorder)
-
-                                    Button("Save") {
-                                        shellViewModel.renameFolder(folder.id, to: folderNameDraft)
-                                        folderNameDraft = ""
-                                        editingFolderID = nil
-                                    }
-                                    .disabled(folderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                                    Button("Cancel") {
-                                        folderNameDraft = ""
-                                        editingFolderID = nil
-                                    }
-                                }
-                            }
-
-                            ForEach(shellViewModel.savedLinks(in: folder)) { link in
-                                savedLinkRow(link, icon: "link")
-                                    .padding(.leading, 18)
-                            }
-                        }
-                    }
-                }
-
-                section("Saved Links") {
-                    HStack(spacing: 8) {
-                        Button {
-                            savedLinkTitleDraft = browserViewModel.pageTitle == "ArcBrowser" ? "" : browserViewModel.pageTitle
-                            savedLinkURLDraft = browserViewModel.displayURL
-                            editingSavedLinkID = nil
-                            isAddingSavedLink.toggle()
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            shellViewModel.saveCurrentPage(folderID: nil, title: browserViewModel.pageTitle, url: browserViewModel.displayURL)
-                        } label: {
-                            Image(systemName: "bookmark.fill")
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(browserViewModel.displayURL.isEmpty)
-                    }
-
-                    if isAddingSavedLink {
-                        VStack(spacing: 8) {
-                            TextField("Title", text: $savedLinkTitleDraft)
-                                .textFieldStyle(.roundedBorder)
-
-                            TextField("URL", text: $savedLinkURLDraft)
-                                .textFieldStyle(.roundedBorder)
-
-                            HStack {
-                                Button("Add") {
-                                    shellViewModel.createSavedLink(title: savedLinkTitleDraft, url: savedLinkURLDraft, folderID: nil)
-                                    savedLinkTitleDraft = ""
-                                    savedLinkURLDraft = ""
-                                    isAddingSavedLink = false
-                                }
-                                .disabled(
-                                    savedLinkTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                                    savedLinkURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                )
-
-                                Button("Cancel") {
-                                    savedLinkTitleDraft = ""
-                                    savedLinkURLDraft = ""
-                                    isAddingSavedLink = false
-                                }
-                            }
-                        }
-                    }
-
-                    if editingSavedLinkID != nil {
-                        VStack(spacing: 8) {
-                            TextField("Title", text: $savedLinkTitleDraft)
-                                .textFieldStyle(.roundedBorder)
-
-                            TextField("URL", text: $savedLinkURLDraft)
-                                .textFieldStyle(.roundedBorder)
-
-                            HStack {
-                                Button("Save") {
-                                    guard let editingSavedLinkID else { return }
-                                    shellViewModel.updateSavedLink(editingSavedLinkID, title: savedLinkTitleDraft, url: savedLinkURLDraft)
-                                    savedLinkTitleDraft = ""
-                                    savedLinkURLDraft = ""
-                                    self.editingSavedLinkID = nil
-                                }
-                                .disabled(
-                                    savedLinkTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                                    savedLinkURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                )
-
-                                Button("Cancel") {
-                                    savedLinkTitleDraft = ""
-                                    savedLinkURLDraft = ""
-                                    self.editingSavedLinkID = nil
-                                }
-                            }
-                        }
-                    }
-
-                    ForEach(shellViewModel.topLevelSavedLinksForSelectedSpace) { link in
-                        savedLinkRow(link, icon: "bookmark")
-                    }
-                }
-
-                section("History") {
-                    HStack(spacing: 8) {
-                        Button(role: .destructive) {
-                            shellViewModel.clearHistory()
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(shellViewModel.historyEntries.isEmpty)
-                    }
-
-                    ForEach(Array(shellViewModel.recentHistoryEntries.prefix(8))) { entry in
-                        historyRow(entry)
-                    }
-                }
-
-                section("Downloads") {
-                    HStack(spacing: 8) {
-                        Button(role: .destructive) {
-                            shellViewModel.clearDownloads()
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(shellViewModel.downloadRecords.isEmpty)
-                    }
-
-                    ForEach(Array(shellViewModel.recentDownloadRecords.prefix(8))) { record in
-                        downloadRow(record)
-                    }
+    
+    private func toggleSplitView() {
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+            if isSplitViewActive {
+                isSplitViewActive = false
+                splitTabID = nil
+            } else {
+                let currentTabs = shellViewModel.tabsForSelectedSpace
+                if let currentTab = shellViewModel.selectedTab,
+                   let nextTab = currentTabs.first(where: { $0.id != currentTab.id }) {
+                    isSplitViewActive = true
+                    splitTabID = nextTab.id
+                    splitBrowserViewModel.load(nextTab.url)
                 }
             }
-            .padding(16)
-        }
-        .background(Color(nsColor: .windowBackgroundColor))
-    }
-
-    private var browserPane: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Button(action: browserViewModel.goBack) {
-                    Image(systemName: "chevron.left")
-                }
-                .disabled(!browserViewModel.canGoBack)
-
-                Button(action: browserViewModel.goForward) {
-                    Image(systemName: "chevron.right")
-                }
-                .disabled(!browserViewModel.canGoForward)
-
-                Button(action: browserViewModel.reload) {
-                    Image(systemName: browserViewModel.isLoading ? "xmark" : "arrow.clockwise")
-                }
-
-                TextField("Search or enter website name", text: $addressBarText)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit {
-                        shellViewModel.updateSelectedTab(title: addressBarText, url: addressBarText)
-                        browserViewModel.load(addressBarText)
-                    }
-
-                Button("Go") {
-                    shellViewModel.updateSelectedTab(title: addressBarText, url: addressBarText)
-                    browserViewModel.load(addressBarText)
-                }
-            }
-            .padding(12)
-            .background(.bar)
-
-            Divider()
-
-            WebView(viewModel: browserViewModel)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
-
-    private var commandPaletteOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.18)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    closeCommandPalette()
-                }
-
-            VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-
-                    TextField("Search tabs, spaces, links, or commands", text: $commandQuery)
-                        .textFieldStyle(.plain)
-                        .focused($isCommandFieldFocused)
-                        .onSubmit {
-                            guard let firstItem = commandPaletteItems.first else { return }
-                            executeCommand(firstItem.action)
-                        }
-
-                    if !commandQuery.isEmpty {
-                        Button {
-                            commandQuery = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(14)
-
-                Divider()
-
-                ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(commandPaletteItems.prefix(12)) { item in
-                            Button {
-                                executeCommand(item.action)
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: item.systemImage)
-                                        .frame(width: 18)
-                                        .foregroundStyle(.secondary)
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(item.title)
-                                            .foregroundStyle(.primary)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                                        if !item.subtitle.isEmpty {
-                                            Text(item.subtitle)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                        }
-                                    }
-                                }
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 10)
-                            }
-                            .buttonStyle(.plain)
-
-                            Divider()
-                        }
-                    }
-                }
-                .frame(maxHeight: 360)
-            }
-            .frame(width: 640)
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .shadow(radius: 24)
+    
+    private func setupBrowserCallbacks() {
+        browserViewModel.onStateChange = { title, url in
+            shellViewModel.updateSelectedTab(title: title, url: url)
+        }
+        browserViewModel.onDownloadRequested = { title, url in
+            shellViewModel.recordDownloadRequested(title: title, sourceURL: url)
+        }
+        browserViewModel.onDownloadFinished = { destination in
+            shellViewModel.markLatestDownloadFinished(destinationURL: destination)
         }
     }
-
-    private var commandPaletteItems: [CommandPaletteItem] {
-        let query = commandQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-
-        var items: [CommandPaletteItem] = [
-            CommandPaletteItem(
-                id: "command-new-tab",
-                title: "New Tab",
-                subtitle: "Create a tab in the current space",
-                systemImage: "plus.square.on.square",
-                action: .createTab
-            ),
-            CommandPaletteItem(
-                id: "command-new-space",
-                title: "New Space",
-                subtitle: "Create a new space in the current profile",
-                systemImage: "square.grid.2x2",
-                action: .createSpace
-            ),
-            CommandPaletteItem(
-                id: "command-save-page",
-                title: "Save Current Page",
-                subtitle: browserViewModel.displayURL,
-                systemImage: "bookmark",
-                action: .saveCurrentPage
-            ),
-            CommandPaletteItem(
-                id: "command-toggle-pin",
-                title: shellViewModel.selectedTab?.isPinned == true ? "Unpin Tab" : "Pin Tab",
-                subtitle: shellViewModel.selectedTab?.title ?? "Current tab",
-                systemImage: shellViewModel.selectedTab?.isPinned == true ? "pin.slash" : "pin",
-                action: .togglePinnedSelectedTab
-            )
-        ]
-
-        items.append(contentsOf: shellViewModel.profiles.map { profile in
-            CommandPaletteItem(
-                id: "profile-\(profile.id.uuidString)",
-                title: profile.name,
-                subtitle: "Profile",
-                systemImage: "person.crop.circle",
-                action: .selectProfile(profile.id)
-            )
-        })
-
-        items.append(contentsOf: shellViewModel.spaces.map { space in
-            let profileName = shellViewModel.profiles.first(where: { $0.id == space.profileID })?.name ?? ""
-            return CommandPaletteItem(
-                id: "space-\(space.id.uuidString)",
-                title: space.name,
-                subtitle: profileName.isEmpty ? "Space" : "Space in \(profileName)",
-                systemImage: space.icon,
-                action: .selectSpace(space.id)
-            )
-        })
-
-        items.append(contentsOf: shellViewModel.tabSessions.map { tab in
-            CommandPaletteItem(
-                id: "tab-\(tab.id.uuidString)",
-                title: tab.title,
-                subtitle: tab.url,
-                systemImage: "globe",
-                action: .selectTab(tab.id)
-            )
-        })
-
-        if shellViewModel.selectedTab != nil {
-            items.append(contentsOf: shellViewModel.spaces.filter { $0.id != shellViewModel.selectedSpaceID }.map { space in
-                let profileName = shellViewModel.profiles.first(where: { $0.id == space.profileID })?.name ?? ""
-                return CommandPaletteItem(
-                    id: "move-tab-space-\(space.id.uuidString)",
-                    title: "Move Tab to \(space.name)",
-                    subtitle: profileName.isEmpty ? "Move current tab" : "Move current tab to \(profileName)",
-                    systemImage: "arrow.right.circle",
-                    action: .moveSelectedTabToSpace(space.id)
-                )
-            })
+    
+    private func loadInitialTab() {
+        if let tab = shellViewModel.selectedTab {
+            addressBarText = tab.url
+            browserViewModel.load(tab.url)
         }
-
-        if shellViewModel.selectedTab != nil {
-            items.append(contentsOf: shellViewModel.spaces.filter { $0.id != shellViewModel.selectedSpaceID }.map { space in
-                let profileName = shellViewModel.profiles.first(where: { $0.id == space.profileID })?.name ?? ""
-                return CommandPaletteItem(
-                    id: "move-tab-space-\(space.id.uuidString)",
-                    title: "Move Tab to \(space.name)",
-                    subtitle: profileName.isEmpty ? "Move current tab" : "Move current tab to \(profileName)",
-                    systemImage: "arrow.right.circle",
-                    action: .moveSelectedTabToSpace(space.id)
-                )
-            })
-        }
-
-        items.append(contentsOf: shellViewModel.savedLinks.map { link in
-            CommandPaletteItem(
-                id: "saved-link-\(link.id.uuidString)",
-                title: link.title,
-                subtitle: link.url,
-                systemImage: "bookmark",
-                action: .openSavedLink(link.id)
-            )
-        })
-
-        items.append(contentsOf: shellViewModel.recentHistoryEntries.prefix(50).map { entry in
-            CommandPaletteItem(
-                id: "history-\(entry.id.uuidString)",
-                title: entry.title,
-                subtitle: entry.url,
-                systemImage: "clock.arrow.circlepath",
-                action: .openHistoryEntry(entry.id)
-            )
-        })
-
-        items.append(contentsOf: shellViewModel.recentDownloadRecords.prefix(50).map { record in
-            CommandPaletteItem(
-                id: "download-\(record.id.uuidString)",
-                title: record.title,
-                subtitle: record.destinationPath ?? record.sourceURL,
-                systemImage: "arrow.down.circle",
-                action: .openDownload(record.id)
-            )
-        })
-
-        if !query.isEmpty {
-            if URL(string: commandQuery)?.scheme != nil || commandQuery.contains(".") || commandQuery.contains(" ") {
-                items.insert(
-                    CommandPaletteItem(
-                        id: "typed-input-\(commandQuery)",
-                        title: commandQuery,
-                        subtitle: "Open URL or search query",
-                        systemImage: "arrow.up.right.square",
-                        action: .openTypedInput(commandQuery)
-                    ),
-                    at: 0
-                )
-            }
-
-            return items.filter {
-                $0.title.lowercased().contains(query) ||
-                $0.subtitle.lowercased().contains(query)
-            }
-        }
-
-        return items
-    }
-
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            content()
-        }
-    }
-
-    private func savedLinkRow(_ link: SavedLink, icon: String) -> some View {
-        HStack(spacing: 8) {
-            Button {
-                shellViewModel.openLinkInSelectedTab(link)
-                addressBarText = link.url
-                browserViewModel.load(link.url)
-            } label: {
-                Label(link.title, systemImage: icon)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                editingSavedLinkID = link.id
-                savedLinkTitleDraft = link.title
-                savedLinkURLDraft = link.url
-                isAddingSavedLink = false
-            } label: {
-                Image(systemName: "pencil")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-
-            Button(role: .destructive) {
-                shellViewModel.deleteSavedLink(link.id)
-            } label: {
-                Image(systemName: "trash")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private func tabRow(_ tab: BrowserTabSession) -> some View {
-        HStack(spacing: 8) {
-            Button {
-                shellViewModel.selectTab(tab.id)
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(tab.title)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-
-                    Text(tab.url)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(tab.id == shellViewModel.selectedTabID ? shellViewModel.selectedProfile.theme.color.opacity(0.15) : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                shellViewModel.togglePinned(for: tab.id)
-            } label: {
-                Image(systemName: tab.isPinned ? "pin.slash" : "pin")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                shellViewModel.closeTab(tab.id)
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private func historyRow(_ entry: BrowserHistoryEntry) -> some View {
-        HStack(spacing: 8) {
-            Button {
-                shellViewModel.updateSelectedTab(title: entry.title, url: entry.url)
-                addressBarText = entry.url
-                browserViewModel.load(entry.url)
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.title)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-
-                    Text(entry.url)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-
-            Button(role: .destructive) {
-                shellViewModel.deleteHistoryEntry(entry.id)
-            } label: {
-                Image(systemName: "trash")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private func downloadRow(_ record: BrowserDownloadRecord) -> some View {
-        HStack(spacing: 8) {
-            Button {
-                openDownloadRecord(record)
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(record.title)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-
-                    Text(record.destinationPath ?? record.sourceURL)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-
-            Text(downloadStatusLabel(for: record.status))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func loadSelectedTab() {
-        guard let selectedTab = shellViewModel.selectedTab else { return }
-
-        addressBarText = selectedTab.url
-
-        if browserViewModel.displayURL != selectedTab.url {
-            browserViewModel.load(selectedTab.url)
-        }
-    }
-
-    private func openCommandPalette() {
-        commandQuery = ""
-        isCommandPalettePresented = true
-
-        DispatchQueue.main.async {
-            isCommandFieldFocused = true
-        }
-    }
-
-    private func closeCommandPalette() {
-        isCommandPalettePresented = false
-        isCommandFieldFocused = false
-        commandQuery = ""
-    }
-
-    private func executeCommand(_ action: CommandPaletteAction) {
-        switch action {
-        case .createTab:
-            shellViewModel.createTab(in: shellViewModel.selectedSpaceID)
-            loadSelectedTab()
-
-        case .createSpace:
-            shellViewModel.createSpace(name: "New Space")
-            loadSelectedTab()
-
-        case .saveCurrentPage:
-            shellViewModel.saveCurrentPage(folderID: nil, title: browserViewModel.pageTitle, url: browserViewModel.displayURL)
-
-        case .togglePinnedSelectedTab:
-            shellViewModel.togglePinnedForSelectedTab()
-
-        case let .selectProfile(profileID):
-            shellViewModel.selectProfile(profileID)
-            loadSelectedTab()
-
-        case let .selectSpace(spaceID):
-            if let space = shellViewModel.spaces.first(where: { $0.id == spaceID }) {
-                shellViewModel.selectProfile(space.profileID)
-                shellViewModel.selectSpace(spaceID)
-                loadSelectedTab()
-            }
-
-        case let .selectTab(tabID):
-            if let tab = shellViewModel.tabSessions.first(where: { $0.id == tabID }),
-               let space = shellViewModel.spaces.first(where: { $0.id == tab.spaceID }) {
-                shellViewModel.selectProfile(space.profileID)
-                shellViewModel.selectSpace(space.id)
-                shellViewModel.selectTab(tabID)
-                loadSelectedTab()
-            }
-
-        case let .moveSelectedTabToSpace(spaceID):
-            if let space = shellViewModel.spaces.first(where: { $0.id == spaceID }) {
-                shellViewModel.selectProfile(space.profileID)
-                shellViewModel.moveSelectedTab(to: spaceID)
-                loadSelectedTab()
-            }
-
-        case let .openSavedLink(linkID):
-            if let link = shellViewModel.savedLinks.first(where: { $0.id == linkID }),
-               let space = shellViewModel.spaces.first(where: { $0.id == link.spaceID }) {
-                shellViewModel.selectProfile(space.profileID)
-                shellViewModel.selectSpace(space.id)
-                shellViewModel.openLinkInSelectedTab(link)
-                addressBarText = link.url
-                browserViewModel.load(link.url)
-            }
-
-        case let .openHistoryEntry(entryID):
-            if let entry = shellViewModel.historyEntries.first(where: { $0.id == entryID }) {
-                shellViewModel.updateSelectedTab(title: entry.title, url: entry.url)
-                addressBarText = entry.url
-                browserViewModel.load(entry.url)
-            }
-
-        case let .openDownload(downloadID):
-            if let record = shellViewModel.downloadRecords.first(where: { $0.id == downloadID }) {
-                openDownloadRecord(record)
-            }
-
-        case let .openTypedInput(input):
-            shellViewModel.updateSelectedTab(title: input, url: input)
-            addressBarText = input
-            browserViewModel.load(input)
-        }
-
-        closeCommandPalette()
-    }
-
-    private func downloadStatusLabel(for status: BrowserDownloadStatus) -> String {
-        switch status {
-        case .inProgress:
-            return "In Progress"
-        case .finished:
-            return "Done"
-        case .failed:
-            return "Failed"
-        }
-    }
-
-    private func openDownloadRecord(_ record: BrowserDownloadRecord) {
-        guard record.status == .finished,
-              let destinationPath = record.destinationPath else { return }
-
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: destinationPath)])
     }
 }
 
-#Preview {
-    ContentView()
+// MARK: - Arc Sidebar
+// Redesigned with proper spacing and restraint
+struct ArcSidebar: View {
+    @ObservedObject var shellViewModel: BrowserShellViewModel
+    @ObservedObject var browserViewModel: BrowserViewModel
+    @Binding var addressBarText: String
+    @Binding var isCollapsed: Bool
+    @Binding var showingCommandBar: Bool
+    let isSplitViewActive: Bool
+    let onToggleSplitView: () -> Void
+    
+    @State private var hoveredSpaceID: UUID?
+    @State private var hoveredTabID: UUID?
+    
+    private var themeColor: Color {
+        shellViewModel.selectedProfile.theme.color
+    }
+    
+    var body: some View {
+        ZStack {
+            // Background - using system semantic colors
+            Color(NSColor.windowBackgroundColor)
+            
+            VStack(spacing: 0) {
+                // Address Bar - minimal, functional
+                ArcAddressBar(
+                    text: $addressBarText,
+                    isLoading: browserViewModel.isLoading,
+                    onSubmit: {
+                        // Update the current tab's URL so the view switches from NewTabView to WebView
+                        shellViewModel.updateSelectedTab(title: "Loading...", url: addressBarText)
+                        browserViewModel.load(addressBarText)
+                    },
+                    onCommandBar: {
+                        showingCommandBar = true
+                    }
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+                
+                // Favorites Row - compact grid
+                ArcFavoritesGrid(
+                    savedLinks: Array(shellViewModel.savedLinks.prefix(8)),
+                    themeColor: themeColor,
+                    onSelect: { url in
+                        addressBarText = url
+                        // Update the current tab's URL so the view switches from NewTabView to WebView
+                        shellViewModel.updateSelectedTab(title: "Loading...", url: url)
+                        browserViewModel.load(url)
+                    }
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+                
+                Divider()
+                    .padding(.horizontal, 16)
+                
+                // Tab List - the main content
+                ScrollView(showsIndicators: false) {
+                    LazyVStack(spacing: 4) {
+                        // Pinned tabs section
+                        if !shellViewModel.pinnedTabsForSelectedSpace.isEmpty {
+                            ForEach(shellViewModel.pinnedTabsForSelectedSpace) { tab in
+                                TabRow(
+                                    tab: tab,
+                                    isActive: tab.id == shellViewModel.selectedTabID,
+                                    isHovered: hoveredTabID == tab.id,
+                                    themeColor: themeColor
+                                )
+                                .onTapGesture {
+                                    selectTab(tab)
+                                }
+                                .onHover { hovering in
+                                    hoveredTabID = hovering ? tab.id : nil
+                                }
+                            }
+                            
+                            if !shellViewModel.unpinnedTabsForSelectedSpace.isEmpty {
+                                Divider()
+                                    .padding(.vertical, 8)
+                                    .padding(.horizontal, 16)
+                            }
+                        }
+                        
+                        // Unpinned tabs
+                        ForEach(shellViewModel.unpinnedTabsForSelectedSpace) { tab in
+                            TabRow(
+                                tab: tab,
+                                isActive: tab.id == shellViewModel.selectedTabID,
+                                isHovered: hoveredTabID == tab.id,
+                                themeColor: themeColor
+                            )
+                            .onTapGesture {
+                                selectTab(tab)
+                            }
+                            .onHover { hovering in
+                                hoveredTabID = hovering ? tab.id : nil
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 12)
+                }
+                
+                Spacer()
+                
+                // Spaces Row - minimal pills
+                VStack(spacing: 12) {
+                    Divider()
+                        .padding(.horizontal, 16)
+                    
+                    // Spaces pills
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(shellViewModel.spacesForSelectedProfile) { space in
+                                let isSelected = space.id == shellViewModel.selectedSpaceID
+                                
+                                SpacePill(
+                                    space: space,
+                                    isSelected: isSelected,
+                                    themeColor: themeColor
+                                )
+                                .onTapGesture {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                        switchToSpace(space)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                    
+                    // Bottom toolbar
+                    HStack(spacing: 16) {
+                        Button {
+                            createNewTab()
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 28, height: 28)
+                                .background(
+                                    Circle()
+                                        .fill(Color(NSColor.controlBackgroundColor))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        
+                        Spacer()
+                        
+                        Button(action: onToggleSplitView) {
+                            Image(systemName: isSplitViewActive ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(isSplitViewActive ? themeColor : .secondary)
+                        }
+                        .buttonStyle(.plain)
+                        
+                        Button {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                isCollapsed.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "sidebar.left")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+                }
+            }
+        }
+        .overlay(
+            Rectangle()
+                .fill(Color(NSColor.separatorColor))
+                .frame(width: 1),
+            alignment: .trailing
+        )
+    }
+    
+    private func selectTab(_ tab: BrowserTabSession) {
+        shellViewModel.selectedTabID = tab.id
+        addressBarText = tab.url
+        browserViewModel.load(tab.url)
+    }
+    
+    private func switchToSpace(_ space: BrowserSpace) {
+        shellViewModel.selectedSpaceID = space.id
+        // Select first tab of new space
+        if let firstTab = shellViewModel.tabsForSelectedSpace.first {
+            shellViewModel.selectedTabID = firstTab.id
+            addressBarText = firstTab.url
+            browserViewModel.load(firstTab.url)
+        } else {
+            // Create new tab if space is empty
+            createNewTab()
+        }
+    }
+    
+    private func createNewTab() {
+        shellViewModel.createTab(in: shellViewModel.selectedSpaceID ?? UUID())
+        if let tab = shellViewModel.selectedTab {
+            addressBarText = tab.url
+            browserViewModel.load(tab.url)
+        }
+    }
+}
+
+// MARK: - Address Bar
+// Minimal, functional, clean
+struct ArcAddressBar: View {
+    @Binding var text: String
+    let isLoading: Bool
+    let onSubmit: () -> Void
+    let onCommandBar: () -> Void
+    
+    @FocusState private var isFocused: Bool
+    @State private var isHovered = false
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            // Icon
+            if isLoading {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle())
+                    .scaleEffect(0.7)
+                    .frame(width: 16, height: 16)
+            } else {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+            
+            // TextField
+            TextField("Search or enter address", text: $text)
+                .font(.system(size: 14, weight: .regular, design: .rounded))
+                .textFieldStyle(.plain)
+                .focused($isFocused)
+                .onSubmit {
+                    onSubmit()
+                    isFocused = false
+                }
+            
+            Spacer()
+            
+            // Command shortcut (when not focused)
+            if !isFocused && text.isEmpty {
+                Button(action: onCommandBar) {
+                    HStack(spacing: 2) {
+                        Text("⌘")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                        Text("K")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                    }
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Color(NSColor.tertiarySystemFill))
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+            
+            // Clear button (when focused and has text)
+            if isFocused && !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isFocused ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1.5)
+        )
+        .animation(.easeInOut(duration: 0.15), value: isFocused)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+    }
+}
+
+// MARK: - Favorites Grid
+struct ArcFavoritesGrid: View {
+    let savedLinks: [SavedLink]
+    let themeColor: Color
+    let onSelect: (String) -> Void
+    
+    @State private var hoveredID: UUID?
+    
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 32, maximum: 36))], spacing: 8) {
+            ForEach(savedLinks) { link in
+                FavoriteIcon(
+                    link: link,
+                    themeColor: themeColor,
+                    isHovered: hoveredID == link.id
+                )
+                .onTapGesture {
+                    onSelect(link.url)
+                }
+                .onHover { hovering in
+                    hoveredID = hovering ? link.id : nil
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Favorite Icon
+struct FavoriteIcon: View {
+    let link: SavedLink
+    let themeColor: Color
+    let isHovered: Bool
+    
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isHovered ? themeColor.opacity(0.15) : Color(NSColor.tertiarySystemFill))
+                .frame(width: 34, height: 34)
+            
+            Image(systemName: iconForURL(link.url))
+                .font(.system(size: 16, weight: .medium, design: .rounded))
+                .foregroundStyle(isHovered ? themeColor : .secondary)
+        }
+        .scaleEffect(isHovered ? 1.05 : 1.0)
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
+    }
+    
+    private func iconForURL(_ url: String) -> String {
+        let lowercased = url.lowercased()
+        if lowercased.contains("google") { return "g.circle.fill" }
+        if lowercased.contains("github") { return "number.circle.fill" }
+        if lowercased.contains("youtube") { return "play.rectangle.fill" }
+        if lowercased.contains("twitter") || lowercased.contains("x.com") { return "bird.fill" }
+        if lowercased.contains("mail") || lowercased.contains("gmail") { return "envelope.fill" }
+        return "globe"
+    }
+}
+
+// MARK: - Tab Row
+struct TabRow: View {
+    let tab: BrowserTabSession
+    let isActive: Bool
+    let isHovered: Bool
+    let themeColor: Color
+    
+    var body: some View {
+        HStack(spacing: 10) {
+            // Favicon
+            ZStack {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isActive ? themeColor.opacity(0.12) : Color(NSColor.tertiarySystemFill))
+                    .frame(width: 26, height: 26)
+                
+                Image(systemName: faviconFor(tab.url))
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(isActive ? themeColor : .secondary)
+            }
+            
+            // Title
+            Text(tab.title)
+                .font(.system(size: 13, weight: isActive ? .semibold : .regular, design: .rounded))
+                .lineLimit(1)
+                .foregroundStyle(isActive ? .primary : .secondary)
+            
+            Spacer()
+            
+            // Active indicator
+            if isActive {
+                Circle()
+                    .fill(themeColor)
+                    .frame(width: 5, height: 5)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isActive ? themeColor.opacity(0.08) : (isHovered ? Color(NSColor.quaternarySystemFill) : Color.clear))
+        )
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
+        .animation(.easeInOut(duration: 0.15), value: isActive)
+        .contentShape(Rectangle())
+    }
+    
+    private func faviconFor(_ url: String) -> String {
+        let lowercased = url.lowercased()
+        if lowercased.contains("google") { return "g.circle.fill" }
+        if lowercased.contains("github") { return "number.circle.fill" }
+        if lowercased.contains("youtube") { return "play.rectangle.fill" }
+        if lowercased.contains("twitter") || lowercased.contains("x.com") { return "bird.fill" }
+        if lowercased.contains("apple") { return "apple.logo" }
+        return "globe"
+    }
+}
+
+// MARK: - Space Pill
+struct SpacePill: View {
+    let space: BrowserSpace
+    let isSelected: Bool
+    let themeColor: Color
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: space.icon)
+                .font(.system(size: 10, weight: isSelected ? .semibold : .medium, design: .rounded))
+            
+            if isSelected {
+                Text(space.name)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+            }
+        }
+        .padding(.horizontal, isSelected ? 10 : 6)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(isSelected ? themeColor.opacity(0.15) : Color(NSColor.tertiarySystemFill))
+        )
+        .foregroundStyle(isSelected ? themeColor : .secondary)
+    }
+}
+
+// MARK: - Main Content
+struct ArcMainContent: View {
+    @ObservedObject var browserViewModel: BrowserViewModel
+    @ObservedObject var splitBrowserViewModel: BrowserViewModel
+    @ObservedObject var shellViewModel: BrowserShellViewModel
+    @Binding var addressBarText: String
+    let isSidebarCollapsed: Bool
+    let isSplitViewActive: Bool
+    let splitTabID: UUID?
+    let onToggleSidebar: () -> Void
+    let onToggleSplitView: () -> Void
+    
+    private var themeColor: Color {
+        shellViewModel.selectedProfile.theme.color
+    }
+    
+    var body: some View {
+        ZStack {
+            // Gradient background for new tab
+            if shouldShowGradient() {
+                ArcGradientBackground(themeColor: themeColor)
+            }
+            
+            // Content
+            if isSplitViewActive {
+                // Split View
+                HStack(spacing: 0) {
+                    if let tab = shellViewModel.selectedTab {
+                        WebView(viewModel: browserViewModel)
+                            .id(tab.id)
+                            .onAppear {
+                                browserViewModel.load(tab.url)
+                            }
+                            .overlay(
+                                Rectangle()
+                                    .fill(Color(NSColor.separatorColor))
+                                    .frame(width: 1),
+                                alignment: .trailing
+                            )
+                    }
+                    
+                    if let splitTabID = splitTabID,
+                       let splitTab = shellViewModel.tabSessions.first(where: { $0.id == splitTabID }) {
+                        WebView(viewModel: splitBrowserViewModel)
+                            .id(splitTab.id)
+                            .onAppear {
+                                splitBrowserViewModel.load(splitTab.url)
+                            }
+                    }
+                }
+            } else {
+                // Single tab
+                if let tab = shellViewModel.selectedTab {
+                    if isNewTab(tab.url) {
+                        NewTabView(
+                            savedLinks: shellViewModel.savedLinks,
+                            recentHistory: shellViewModel.recentHistoryEntries,
+                            selectedProfile: shellViewModel.selectedProfile,
+                            onOpenURL: { url in
+                                addressBarText = url
+                                // Update the current tab's URL so the view switches from NewTabView to WebView
+                                shellViewModel.updateSelectedTab(title: "Loading...", url: url)
+                                browserViewModel.load(url)
+                            },
+                            onCreateTab: {},
+                            onSelectTab: { _ in },
+                            onSelectSpace: { _ in }
+                        )
+                    } else {
+                        WebView(viewModel: browserViewModel)
+                            .id(tab.id)
+                            .onAppear {
+                                browserViewModel.load(tab.url)
+                            }
+                    }
+                }
+            }
+            
+            // Sidebar toggle button (when collapsed)
+            if isSidebarCollapsed {
+                VStack {
+                    HStack {
+                        Button(action: onToggleSidebar) {
+                            Image(systemName: "sidebar.left")
+                                .font(.system(size: 15, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .padding(10)
+                                .background(
+                                    Circle()
+                                        .fill(Color(NSColor.controlBackgroundColor))
+                                        .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.leading, 12)
+                        .padding(.top, 12)
+                        
+                        Spacer()
+                    }
+                    
+                    Spacer()
+                }
+            }
+        }
+    }
+    
+    private func shouldShowGradient() -> Bool {
+        if isSplitViewActive { return false }
+        if let tab = shellViewModel.selectedTab {
+            return isNewTab(tab.url)
+        }
+        return true
+    }
+    
+    private func isNewTab(_ url: String) -> Bool {
+        url == "about:newtab" || url.isEmpty || url == "https://www.apple.com"
+    }
+}
+
+// MARK: - Gradient Background
+struct ArcGradientBackground: View {
+    let themeColor: Color
+    @State private var animateGradient = false
+    
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // Base gradient
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.42, green: 0.20, blue: 0.60),
+                        Color(red: 0.58, green: 0.28, blue: 0.48),
+                        Color(red: 0.25, green: 0.38, blue: 0.72),
+                        Color(red: 0.42, green: 0.20, blue: 0.60)
+                    ],
+                    startPoint: animateGradient ? .topLeading : .bottomTrailing,
+                    endPoint: animateGradient ? .bottomTrailing : .topLeading
+                )
+                .hueRotation(.degrees(animateGradient ? 5 : -5))
+                .animation(.easeInOut(duration: 8).repeatForever(autoreverses: true), value: animateGradient)
+                .onAppear { animateGradient = true }
+                
+                // Radial glows
+                RadialGradient(
+                    colors: [Color.pink.opacity(0.3), Color.clear],
+                    center: .topTrailing,
+                    startRadius: 0,
+                    endRadius: geometry.size.width * 0.6
+                )
+                
+                RadialGradient(
+                    colors: [Color.purple.opacity(0.25), Color.clear],
+                    center: .topLeading,
+                    startRadius: 0,
+                    endRadius: geometry.size.width * 0.5
+                )
+                
+                // Vignette
+                RadialGradient(
+                    colors: [Color.clear, Color.black.opacity(0.2)],
+                    center: .center,
+                    startRadius: geometry.size.width * 0.4,
+                    endRadius: geometry.size.width
+                )
+            }
+        }
+        .ignoresSafeArea()
+    }
+}
+
+// MARK: - Command Bar
+struct ArcSpotlightCommandBar: View {
+    @ObservedObject var shellViewModel: BrowserShellViewModel
+    @ObservedObject var browserViewModel: BrowserViewModel
+    @Binding var isPresented: Bool
+    let onOpenURL: (String) -> Void
+    
+    @State private var query = ""
+    @FocusState private var isFocused: Bool
+    
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.25)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    isPresented = false
+                }
+            
+            VStack(spacing: 0) {
+                // Search field
+                HStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 18, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                    
+                    TextField("Search or enter address...", text: $query)
+                        .font(.system(size: 17, weight: .regular, design: .rounded))
+                        .textFieldStyle(.plain)
+                        .focused($isFocused)
+                        .onSubmit {
+                            handleSubmit()
+                        }
+                    
+                    if !query.isEmpty {
+                        Button {
+                            query = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 16, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                
+                Divider()
+                
+                // Results area
+                ScrollView {
+                    VStack(spacing: 8) {
+                        if query.isEmpty {
+                            VStack(spacing: 12) {
+                                Image(systemName: "command")
+                                    .font(.system(size: 32, design: .rounded))
+                                    .foregroundStyle(.secondary.opacity(0.5))
+                                
+                                Text("Type to search or enter a URL")
+                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.top, 40)
+                        } else {
+                            // URL entry option
+                            Button {
+                                handleSubmit()
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "arrow.up.forward")
+                                        .font(.system(size: 16, weight: .medium, design: .rounded))
+                                        .foregroundStyle(themeColor)
+                                        .frame(width: 24)
+                                    
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Go to \"\(query)\"")
+                                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(.primary)
+                                        
+                                        Text("Navigate to this address")
+                                            .font(.system(size: 12, weight: .regular, design: .rounded))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    Text("↵")
+                                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(themeColor.opacity(0.08))
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 8)
+                            .padding(.top, 8)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
+                .frame(maxHeight: 300)
+            }
+            .frame(width: 600)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(NSColor.windowBackgroundColor))
+                    .shadow(color: .black.opacity(0.2), radius: 40, x: 0, y: 20)
+            )
+        }
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                isFocused = true
+            }
+        }
+    }
+    
+    private var themeColor: Color {
+        shellViewModel.selectedProfile.theme.color
+    }
+    
+    private func handleSubmit() {
+        guard !query.isEmpty else { return }
+        isPresented = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            onOpenURL(query)
+        }
+    }
 }
