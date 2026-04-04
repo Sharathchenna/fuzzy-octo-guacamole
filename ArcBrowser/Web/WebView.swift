@@ -10,8 +10,16 @@ struct WebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        
+        // Set a modern user agent to get the latest web interfaces (like Google's modern UI)
+        // Using Safari 17.0 on macOS Sonoma user agent
+        configuration.applicationNameForUserAgent = "Version/17.0 Safari/605.1.15"
+        
         let webView = WKWebView(frame: .zero, configuration: configuration)
-
+        
+        // Set custom user agent to identify as a modern browser
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+        
         webView.allowsBackForwardNavigationGestures = true
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
