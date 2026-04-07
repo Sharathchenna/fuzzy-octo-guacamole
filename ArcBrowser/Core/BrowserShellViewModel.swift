@@ -141,23 +141,6 @@ struct BrowserDownloadRecord: Identifiable, Hashable, Codable {
     var createdAt: Date
 }
 
-enum ProfileTheme: String, CaseIterable, Hashable, Codable {
-    case sky
-    case sunset
-    case forest
-
-    var color: Color {
-        switch self {
-        case .sky:
-            return .blue
-        case .sunset:
-            return .orange
-        case .forest:
-            return .green
-        }
-    }
-}
-
 @MainActor
 final class BrowserShellViewModel: ObservableObject {
     @Published private(set) var profiles: [BrowserProfile]

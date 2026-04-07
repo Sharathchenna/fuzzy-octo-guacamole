@@ -7,13 +7,25 @@
 
 import SwiftUI
 import AppKit
+import Combine
+
+// Global theme color storage for window background
+@MainActor
+class WindowThemeState: ObservableObject {
+    static let shared = WindowThemeState()
+    @Published var sidebarBackgroundColor: NSColor = NSColor(
+        red: 0.96, green: 0.94, blue: 0.97, alpha: 1.0
+    )
+}
 
 @main
 struct ArcBrowserApp: App {
+    @StateObject private var themeState = WindowThemeState.shared
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .background(WindowBackgroundModifier())
+                .background(WindowBackgroundModifier(themeState: themeState))
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1200, height: 800)
@@ -67,14 +79,13 @@ struct ArcBrowserApp: App {
 
 // MARK: - Window Background Modifier
 struct WindowBackgroundModifier: NSViewRepresentable {
+    @ObservedObject var themeState: WindowThemeState
+    
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async {
             if let window = view.window {
-                // Set window background to match sidebar lavender theme
-                window.backgroundColor = NSColor(
-                    red: 0.96, green: 0.94, blue: 0.97, alpha: 1.0
-                ) // #F5F0F5
+                window.backgroundColor = themeState.sidebarBackgroundColor
                 window.isOpaque = false
             }
         }
@@ -84,16 +95,20 @@ struct WindowBackgroundModifier: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         DispatchQueue.main.async {
             if let window = nsView.window {
-                // Ensure background stays lavender
-                window.backgroundColor = NSColor(
-                    red: 0.96, green: 0.94, blue: 0.97, alpha: 1.0
-                )
+                // Update window background to match current theme
+                window.backgroundColor = themeState.sidebarBackgroundColor
             }
         }
     }
 }
 
-// MARK: - Notification Names
+// MARK: - NSColor Extension
+extension NSColor {
+    static func fromSwiftUIColor(_ color: Color) -> NSColor {
+        // Create a platform color from SwiftUI Color
+        return NSColor(color)
+    }
+}
 extension NSNotification.Name {
     static let newTab = NSNotification.Name("ArcBrowser.newTab")
     static let closeTab = NSNotification.Name("ArcBrowser.closeTab")

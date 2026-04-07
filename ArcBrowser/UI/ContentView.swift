@@ -39,8 +39,12 @@ struct ContentView: View {
         shellViewModel.selectedProfile.appTheme
     }
     
+    private var profileTheme: ProfileTheme {
+        shellViewModel.selectedProfile.theme
+    }
+    
     private var themeColors: ArcThemeColors {
-        ArcColors.themeColors(for: appTheme)
+        ArcThemeColors.themedColors(for: profileTheme, appTheme: appTheme)
     }
     
     var body: some View {
@@ -92,6 +96,7 @@ struct ContentView: View {
                 peekPreviewPosition: peekPreviewPosition,
                 themeColor: themeColor,
                 appTheme: appTheme,
+                profileTheme: profileTheme,
                 onToggleSidebar: toggleSidebar,
                 onToggleSplitView: toggleSplitView,
                 onOpenURL: openURL
@@ -122,7 +127,22 @@ struct ContentView: View {
             setupBrowserCallbacks()
             loadInitialTab()
             setupKeyboardShortcuts()
+            updateWindowBackground()
         }
+        .onChange(of: profileTheme) { oldValue, newValue in
+            updateWindowBackground()
+        }
+        .onChange(of: appTheme) { oldValue, newValue in
+            updateWindowBackground()
+        }
+    }
+    
+    // MARK: - Window Background Update
+    
+    private func updateWindowBackground() {
+        // Convert SwiftUI Color to NSColor for window background
+        let color = themeColors.sidebarBackground
+        WindowThemeState.shared.sidebarBackgroundColor = NSColor.fromSwiftUIColor(color)
     }
     
     // MARK: - Actions
@@ -367,24 +387,19 @@ struct ArcSidebar: View {
                 themeColors.sidebarBackground
                     .frame(height: 28)
                 
-                // Top Bar with Sidebar Toggle
-                HStack {
-                    // Sidebar toggle button
-                    Button {
-                        withAnimation(ArcAnimations.sidebarCollapse) {
-                            isCollapsed.toggle()
-                        }
-                    } label: {
-                        Image(systemName: "sidebar.left")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(themeColors.textSecondary)
+                // URL/Search Bar at top of sidebar (like in reference design)
+                SidebarAddressBar(
+                    text: $addressBarText,
+                    isLoading: browserViewModel.isLoading,
+                    themeColors: themeColors,
+                    onSubmit: {
+                        let url = addressBarText
+                        shellViewModel.updateSelectedTab(title: "Loading...", url: url)
+                        browserViewModel.load(url)
                     }
-                    .buttonStyle(.plain)
-                    
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+                )
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
                 
                 // Favorites Grid - Draggable 2x3 layout (max 6 items)
                 ArcSidebarFavoritesSection(
@@ -667,6 +682,65 @@ struct ArcMainContentAddressBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(appTheme == .light ? Color.clear : themeColors.secondaryBackground.opacity(0.5))
+    }
+}
+
+// MARK: - Sidebar Address Bar (At top of sidebar per reference design)
+struct SidebarAddressBar: View {
+    @Binding var text: String
+    let isLoading: Bool
+    let themeColors: ArcThemeColors
+    let onSubmit: () -> Void
+    
+    @FocusState private var isFocused: Bool
+    @State private var isHovered = false
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            // Lock/Security icon
+            if isLoading {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle())
+                    .scaleEffect(0.6)
+                    .frame(width: 16, height: 16)
+            } else {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(themeColors.textTertiary)
+            }
+            
+            // URL TextField
+            TextField("Search or enter address", text: $text)
+                .font(ArcTypography.bodySmall)
+                .textFieldStyle(.plain)
+                .focused($isFocused)
+                .onSubmit(onSubmit)
+            
+            Spacer()
+            
+            // Clear button when focused
+            if isFocused && !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(themeColors.textTertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(themeColors.secondaryBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isFocused ? themeColors.textSecondary.opacity(0.3) : Color.clear, lineWidth: 1.5)
+        )
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(ArcAnimations.hover, value: isFocused)
+        .onHover { hovering in isHovered = hovering }
     }
 }
 
@@ -1467,39 +1541,24 @@ struct ArcMainContent: View {
     let peekPreviewPosition: CGPoint
     let themeColor: Color
     let appTheme: AppTheme
+    let profileTheme: ProfileTheme
     let onToggleSidebar: () -> Void
     let onToggleSplitView: () -> Void
     let onOpenURL: (String) -> Void
     
+    private var themeColors: ArcThemeColors {
+        ArcThemeColors.themedColors(for: profileTheme, appTheme: appTheme)
+    }
+    
     var body: some View {
         ZStack {
             // Background that matches sidebar theme - extends under traffic lights
-            ArcColors.themeColors(for: appTheme).sidebarBackground
+            themeColors.sidebarBackground
                 .ignoresSafeArea()
             
             VStack(spacing: 0) {
-                // Address Bar at top of main content (per reference design)
-                if let tab = shellViewModel.selectedTab, !isNewTab(tab.url) {
-                    ArcMainContentAddressBar(
-                        text: $addressBarText,
-                        isLoading: browserViewModel.isLoading,
-                        themeColor: themeColor,
-                        appTheme: appTheme,
-                        onSubmit: {
-                            let url = addressBarText
-                            shellViewModel.updateSelectedTab(title: "Loading...", url: url)
-                            browserViewModel.load(url)
-                        },
-                        onCommandBar: {
-                            // Command bar will be handled via keyboard shortcut
-                        }
-                    )
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 8)
-                }
-                
-                // Content
+                // NO Address Bar in main content - it's now in the sidebar
+                // Content only
                 if isSplitViewActive {
                     // Split View
                     HStack(spacing: 0) {

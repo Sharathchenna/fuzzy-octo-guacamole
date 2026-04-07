@@ -80,7 +80,10 @@ struct AppearanceSettingsView: View {
     @ObservedObject var shellViewModel: BrowserShellViewModel
     
     private var themeColors: ArcThemeColors {
-        ArcColors.themeColors(for: shellViewModel.selectedProfile.appTheme)
+        ArcThemeColors.themedColors(
+            for: shellViewModel.selectedProfile.theme,
+            appTheme: shellViewModel.selectedProfile.appTheme
+        )
     }
     
     var body: some View {
