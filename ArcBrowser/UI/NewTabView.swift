@@ -33,38 +33,9 @@ struct NewTabView: View {
     
     var body: some View {
         ZStack {
-            // Arc-style gradient background
-            ArcBackgroundView(themeColor: viewModel.selectedProfile.theme.color)
-            
-            ScrollView {
-                VStack(spacing: 48) {
-                    // Greeting
-                    ArcGreetingSection()
-                    
-                    // Command Bar Button (Arc-style)
-                    ArcCommandBarButton(themeColor: viewModel.selectedProfile.theme.color) {
-                        viewModel.showingCommandBar = true
-                    }
-                    
-                    // Favorites Grid
-                    ArcFavoritesSection(
-                        savedLinks: viewModel.savedLinks,
-                        themeColor: viewModel.selectedProfile.theme.color,
-                        onOpenURL: onOpenURL
-                    )
-                    
-                    // Recent History
-                    ArcRecentSection(
-                        history: viewModel.recentHistory,
-                        themeColor: viewModel.selectedProfile.theme.color,
-                        onOpenURL: onOpenURL
-                    )
-                    
-                    Spacer(minLength: 80)
-                }
-                .padding(.horizontal, 80)
-                .padding(.top, 80)
-            }
+            // Background matching sidebar theme - lavender for light theme
+            ArcThemeColors.light.sidebarBackground
+                .ignoresSafeArea()
         }
         .sheet(isPresented: $viewModel.showingCommandBar) {
             ArcCommandBarSheet(
@@ -192,12 +163,12 @@ struct ArcGreetingSection: View {
     var body: some View {
         VStack(spacing: 12) {
             Text(greetingText)
-                .font(.system(size: 56, weight: .bold, design: .rounded))
+                .font(Font.custom("Nunito-Light", size: 56))
                 .foregroundStyle(.primary)
                 .shadow(color: .black.opacity(0.1), radius: 20, x: 0, y: 10)
             
             Text("Ready to browse?")
-                .font(.system(size: 20, weight: .medium, design: .rounded))
+                .font(Font.custom("Nunito-Medium", size: 20))
                 .foregroundStyle(.secondary.opacity(0.9))
         }
         .offset(y: appearOffset)
@@ -313,7 +284,7 @@ struct KeyboardShortcutBadge: View {
     
     var body: some View {
         Text(shortcut)
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .font(Font.custom("Nunito-SemiBold", size: 12))
             .foregroundStyle(.secondary.opacity(0.8))
             .padding(.horizontal, 8)
             .padding(.vertical, 5)

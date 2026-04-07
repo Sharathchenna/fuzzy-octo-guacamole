@@ -3,6 +3,66 @@ import SwiftUI
 // MARK: - Arc Design System
 // Complete design tokens for the Arc Browser clone
 
+// MARK: - App Theme
+enum AppTheme: String, CaseIterable, Codable {
+    case light = "Light"
+    case dark = "Dark"
+}
+
+// MARK: - Theme Colors
+struct ArcThemeColors {
+    let sidebarBackground: Color
+    let favoriteTileBackground: Color
+    let favoriteTileHover: Color
+    let activeTabBackground: Color
+    let activeTabShadow: Color
+    let textPrimary: Color
+    let textSecondary: Color
+    let textTertiary: Color
+    let folderIcon: Color
+    let folderIconExpanded: Color
+    let secondaryBackground: Color
+    let tertiaryBackground: Color
+    let quaternaryBackground: Color
+    let separator: Color
+    
+    // Light theme colors (from reference design)
+    static let light = ArcThemeColors(
+        sidebarBackground: Color(red: 0.96, green: 0.94, blue: 0.97),      // #F5F0F5 (lavender/pink)
+        favoriteTileBackground: Color(red: 0.92, green: 0.91, blue: 0.94), // #EBE8EF (light gray)
+        favoriteTileHover: Color(red: 0.88, green: 0.86, blue: 0.90),      // Slightly darker
+        activeTabBackground: Color.white,
+        activeTabShadow: Color.black.opacity(0.08),
+        textPrimary: Color(red: 0.10, green: 0.10, blue: 0.10),           // #1A1A1A
+        textSecondary: Color(red: 0.40, green: 0.40, blue: 0.40),         // #666666
+        textTertiary: Color(red: 0.60, green: 0.60, blue: 0.60),         // #999999
+        folderIcon: Color(red: 0.60, green: 0.60, blue: 0.60),
+        folderIconExpanded: Color(red: 0.80, green: 0.25, blue: 0.55),    // Pink/magenta for expanded
+        secondaryBackground: Color(red: 0.94, green: 0.93, blue: 0.95),
+        tertiaryBackground: Color(red: 0.90, green: 0.89, blue: 0.92),
+        quaternaryBackground: Color(red: 0.86, green: 0.85, blue: 0.88),
+        separator: Color.black.opacity(0.06)
+    )
+    
+    // Dark theme colors (glassmorphism)
+    static let dark = ArcThemeColors(
+        sidebarBackground: Color(red: 0.12, green: 0.12, blue: 0.14),
+        favoriteTileBackground: Color(red: 0.18, green: 0.18, blue: 0.20),
+        favoriteTileHover: Color(red: 0.22, green: 0.22, blue: 0.24),
+        activeTabBackground: Color(red: 0.25, green: 0.25, blue: 0.28),
+        activeTabShadow: Color.black.opacity(0.20),
+        textPrimary: Color.white,
+        textSecondary: Color.white.opacity(0.70),
+        textTertiary: Color.white.opacity(0.50),
+        folderIcon: Color.white.opacity(0.60),
+        folderIconExpanded: Color(red: 0.42, green: 0.20, blue: 0.60),    // Purple accent
+        secondaryBackground: Color(red: 0.18, green: 0.18, blue: 0.20),
+        tertiaryBackground: Color(red: 0.22, green: 0.22, blue: 0.24),
+        quaternaryBackground: Color(red: 0.26, green: 0.26, blue: 0.28),
+        separator: Color.white.opacity(0.10)
+    )
+}
+
 // MARK: - Colors
 struct ArcColors {
     // Primary accent colors
@@ -14,7 +74,14 @@ struct ArcColors {
     static let surfaceDark = Color(red: 0.12, green: 0.12, blue: 0.14)
     static let surfaceLight = Color(red: 0.95, green: 0.95, blue: 0.97)
     
-    // Text colors
+    // Light theme specific colors (from reference)
+    static let sidebarLightBackground = Color(red: 0.96, green: 0.94, blue: 0.97)  // #F5F0F5
+    static let favoriteTileLight = Color(red: 0.92, green: 0.91, blue: 0.94)       // #EBE8EF
+    static let textLightPrimary = Color(red: 0.10, green: 0.10, blue: 0.10)        // #1A1A1A
+    static let textLightSecondary = Color(red: 0.40, green: 0.40, blue: 0.40)      // #666666
+    static let folderExpandedPink = Color(red: 0.80, green: 0.25, blue: 0.55)     // Pink folder
+    
+    // Text colors (legacy, use themeColors instead)
     static let textPrimary = Color.white
     static let textSecondary = Color.white.opacity(0.70)
     static let textTertiary = Color.white.opacity(0.50)
@@ -40,35 +107,50 @@ struct ArcColors {
     static var separator: Color {
         Color(NSColor.separatorColor)
     }
+    
+    // Helper to get theme colors
+    static func themeColors(for theme: AppTheme) -> ArcThemeColors {
+        switch theme {
+        case .light:
+            return ArcThemeColors.light
+        case .dark:
+            return ArcThemeColors.dark
+        }
+    }
 }
 
 // MARK: - Typography
 struct ArcTypography {
+    // Nunito Font Family - Premium font integration
+    
     // Hero (new tab greeting)
-    static let hero = Font.system(size: 48, weight: .light, design: .rounded)
+    static let hero = Font.custom("Nunito-Light", size: 48)
     
     // Large titles
-    static let largeTitle = Font.system(size: 32, weight: .semibold, design: .rounded)
-    static let title = Font.system(size: 24, weight: .semibold, design: .rounded)
-    static let title2 = Font.system(size: 20, weight: .semibold, design: .rounded)
+    static let largeTitle = Font.custom("Nunito-SemiBold", size: 32)
+    static let title = Font.custom("Nunito-SemiBold", size: 24)
+    static let title2 = Font.custom("Nunito-SemiBold", size: 20)
     
     // Body text
-    static let bodyLarge = Font.system(size: 16, weight: .regular, design: .rounded)
-    static let body = Font.system(size: 14, weight: .regular, design: .rounded)
-    static let bodySmall = Font.system(size: 13, weight: .regular, design: .rounded)
+    static let bodyLarge = Font.custom("Nunito-Regular", size: 16)
+    static let body = Font.custom("Nunito-Regular", size: 14)
+    static let bodySmall = Font.custom("Nunito-Regular", size: 13)
     
     // Tab titles
-    static let tabTitle = Font.system(size: 13, weight: .medium, design: .rounded)
-    static let tabTitleActive = Font.system(size: 13, weight: .semibold, design: .rounded)
+    static let tabTitle = Font.custom("Nunito-Medium", size: 13)
+    static let tabTitleActive = Font.custom("Nunito-SemiBold", size: 13)
     
     // Captions and labels
-    static let caption = Font.system(size: 12, weight: .regular, design: .rounded)
-    static let label = Font.system(size: 11, weight: .medium, design: .rounded)
-    static let labelSmall = Font.system(size: 10, weight: .medium, design: .rounded)
+    static let caption = Font.custom("Nunito-Regular", size: 12)
+    static let label = Font.custom("Nunito-Medium", size: 11)
+    static let labelSmall = Font.custom("Nunito-Medium", size: 10)
     
     // Command bar
-    static let commandBar = Font.system(size: 18, weight: .regular, design: .rounded)
-    static let commandBarSearch = Font.system(size: 20, weight: .regular, design: .rounded)
+    static let commandBar = Font.custom("Nunito-Regular", size: 18)
+    static let commandBarSearch = Font.custom("Nunito-Regular", size: 20)
+    
+    // Section headers (uppercase style)
+    static let sectionHeader = Font.custom("Nunito-Medium", size: 11)
 }
 
 // MARK: - Spacing
@@ -198,9 +280,9 @@ struct ArcGlass {
 
 // MARK: - Sidebar Dimensions
 struct ArcSidebarDimensions {
-    static let minWidth: CGFloat = 200
-    static let defaultWidth: CGFloat = 260
-    static let maxWidth: CGFloat = 320
+    static let minWidth: CGFloat = 280
+    static let defaultWidth: CGFloat = 320
+    static let maxWidth: CGFloat = 380
 }
 
 // MARK: - Themes

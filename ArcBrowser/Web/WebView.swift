@@ -20,6 +20,9 @@ struct WebView: NSViewRepresentable {
         // Set custom user agent to identify as a modern browser
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
         
+        // Set transparent background to match sidebar theme
+        webView.setValue(false, forKey: "drawsBackground")
+        
         webView.allowsBackForwardNavigationGestures = true
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator

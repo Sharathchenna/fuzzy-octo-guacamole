@@ -4,13 +4,15 @@ import SwiftUI
 struct BrowserTabSession: Identifiable, Hashable, Codable {
     let id: UUID
     var spaceID: UUID
+    var folderID: UUID?  // For nested folder organization
     var title: String
     var url: String
     var isPinned: Bool
 
-    init(id: UUID, spaceID: UUID, title: String, url: String, isPinned: Bool = false) {
+    init(id: UUID, spaceID: UUID, folderID: UUID? = nil, title: String, url: String, isPinned: Bool = false) {
         self.id = id
         self.spaceID = spaceID
+        self.folderID = folderID
         self.title = title
         self.url = url
         self.isPinned = isPinned
@@ -19,6 +21,7 @@ struct BrowserTabSession: Identifiable, Hashable, Codable {
     enum CodingKeys: String, CodingKey {
         case id
         case spaceID
+        case folderID
         case title
         case url
         case isPinned
@@ -28,6 +31,7 @@ struct BrowserTabSession: Identifiable, Hashable, Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         spaceID = try container.decode(UUID.self, forKey: .spaceID)
+        folderID = try container.decodeIfPresent(UUID.self, forKey: .folderID)
         title = try container.decode(String.self, forKey: .title)
         url = try container.decode(String.self, forKey: .url)
         isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
@@ -38,6 +42,29 @@ struct BrowserProfile: Identifiable, Hashable, Codable {
     let id: UUID
     var name: String
     var theme: ProfileTheme
+    var appTheme: AppTheme  // Light/dark theme mode
+    
+    init(id: UUID, name: String, theme: ProfileTheme, appTheme: AppTheme = .light) {
+        self.id = id
+        self.name = name
+        self.theme = theme
+        self.appTheme = appTheme
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        theme = try container.decode(ProfileTheme.self, forKey: .theme)
+        appTheme = try container.decodeIfPresent(AppTheme.self, forKey: .appTheme) ?? .light
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case theme
+        case appTheme
+    }
 }
 
 struct BrowserSpace: Identifiable, Hashable, Codable {
@@ -50,7 +77,38 @@ struct BrowserSpace: Identifiable, Hashable, Codable {
 struct BrowserFolder: Identifiable, Hashable, Codable {
     let id: UUID
     var spaceID: UUID
+    var parentFolderID: UUID?  // For nested folders
     var name: String
+    var icon: String?  // Custom icon
+    var isExpanded: Bool  // Expand/collapse state
+    
+    init(id: UUID, spaceID: UUID, parentFolderID: UUID? = nil, name: String, icon: String? = nil, isExpanded: Bool = false) {
+        self.id = id
+        self.spaceID = spaceID
+        self.parentFolderID = parentFolderID
+        self.name = name
+        self.icon = icon
+        self.isExpanded = isExpanded
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case spaceID
+        case parentFolderID
+        case name
+        case icon
+        case isExpanded
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        spaceID = try container.decode(UUID.self, forKey: .spaceID)
+        parentFolderID = try container.decodeIfPresent(UUID.self, forKey: .parentFolderID)
+        name = try container.decode(String.self, forKey: .name)
+        icon = try container.decodeIfPresent(String.self, forKey: .icon)
+        isExpanded = try container.decodeIfPresent(Bool.self, forKey: .isExpanded) ?? false
+    }
 }
 
 struct SavedLink: Identifiable, Hashable, Codable {
@@ -147,8 +205,8 @@ final class BrowserShellViewModel: ObservableObject {
             return
         }
 
-        let workProfile = BrowserProfile(id: UUID(), name: "Work", theme: .sky)
-        let personalProfile = BrowserProfile(id: UUID(), name: "Personal", theme: .sunset)
+        let workProfile = BrowserProfile(id: UUID(), name: "Work", theme: .sky, appTheme: .light)
+        let personalProfile = BrowserProfile(id: UUID(), name: "Personal", theme: .sunset, appTheme: .light)
 
         let focusSpace = BrowserSpace(id: UUID(), profileID: workProfile.id, name: "Focus", icon: "bolt.fill")
         let researchSpace = BrowserSpace(id: UUID(), profileID: workProfile.id, name: "Research", icon: "book.fill")
@@ -271,6 +329,13 @@ final class BrowserShellViewModel: ObservableObject {
     func updateSelectedProfileTheme(_ theme: ProfileTheme) {
         guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { return }
         profiles[index].theme = theme
+        persist()
+    }
+
+    func toggleSelectedProfileAppTheme() {
+        guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { return }
+        let currentTheme = profiles[index].appTheme
+        profiles[index].appTheme = currentTheme == .light ? .dark : .light
         persist()
     }
 
@@ -577,6 +642,86 @@ final class BrowserShellViewModel: ObservableObject {
 
     func savedLinks(in folder: BrowserFolder) -> [SavedLink] {
         savedLinks.filter { $0.folderID == folder.id }
+    }
+
+    // MARK: - Nested Folder Hierarchy
+    
+    /// Get top-level folders (those without a parent) for the selected space
+    var topLevelFoldersForSelectedSpace: [BrowserFolder] {
+        folders.filter { $0.spaceID == selectedSpaceID && $0.parentFolderID == nil }
+    }
+    
+    /// Get child folders of a specific folder
+    func childFolders(of folderID: UUID) -> [BrowserFolder] {
+        folders.filter { $0.parentFolderID == folderID }
+    }
+    
+    /// Get tabs in a specific folder
+    func tabs(in folderID: UUID) -> [BrowserTabSession] {
+        tabSessions.filter { $0.folderID == folderID }
+    }
+    
+    /// Get top-level tabs (not in any folder) for the selected space
+    var topLevelTabsForSelectedSpace: [BrowserTabSession] {
+        tabSessions.filter { $0.spaceID == selectedSpaceID && $0.folderID == nil }
+    }
+    
+    /// Toggle folder expansion state
+    func toggleFolderExpanded(_ folderID: UUID) {
+        guard let index = folders.firstIndex(where: { $0.id == folderID }) else { return }
+        folders[index].isExpanded.toggle()
+        persist()
+    }
+    
+    /// Create a nested folder inside another folder
+    func createNestedFolder(name: String, parentFolderID: UUID) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        
+        let folder = BrowserFolder(
+            id: UUID(),
+            spaceID: selectedSpaceID,
+            parentFolderID: parentFolderID,
+            name: trimmedName,
+            icon: "folder.fill",
+            isExpanded: false
+        )
+        folders.append(folder)
+        
+        // Auto-expand the parent folder
+        if let parentIndex = folders.firstIndex(where: { $0.id == parentFolderID }) {
+            folders[parentIndex].isExpanded = true
+        }
+        
+        persist()
+    }
+    
+    /// Move a tab to a folder
+    func moveTab(_ tabID: UUID, toFolder folderID: UUID?) {
+        guard let index = tabSessions.firstIndex(where: { $0.id == tabID }) else { return }
+        tabSessions[index].folderID = folderID
+        persist()
+    }
+    
+    /// Update folder icon
+    func updateFolderIcon(_ folderID: UUID, icon: String?) {
+        guard let index = folders.firstIndex(where: { $0.id == folderID }) else { return }
+        folders[index].icon = icon
+        persist()
+    }
+    
+    /// Get the full path of folders from root to the given folder
+    func folderPath(for folderID: UUID) -> [BrowserFolder] {
+        var path: [BrowserFolder] = []
+        var currentID: UUID? = folderID
+        
+        while let id = currentID,
+              let folder = folders.first(where: { $0.id == id }) {
+            path.insert(folder, at: 0)
+            currentID = folder.parentFolderID
+        }
+        
+        return path
     }
 
     private func normalizeSelection() {
